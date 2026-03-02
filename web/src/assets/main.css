@@ -28,6 +28,52 @@
     @import "tailwindcss/preflight.css";
   }
 
+  /*
+   * Reset legacy Unraid WebGUI button styles that bleed into .unapi components.
+   *
+   * The legacy default-base.css sets these on all `button` elements. On Unraid
+   * versions where the `:where(:not(.unapi *))` exclusions are incomplete or
+   * absent, these styles override Nuxt UI / Tailwind component styles, causing
+   * UCheckbox to render as a wide orange rectangle (min-width: 86px + orange
+   * gradient background) and ghost UButton icons to appear oversized and orange.
+   *
+   * The `.unapi button` selector has higher specificity than the bare `button`
+   * legacy rule, so these resets win. Tailwind's scoped utility classes
+   * (e.g. `.unapi .size-4`, `.unapi .bg-primary`) then apply correctly on top.
+   */
+  .unapi button {
+    min-width: unset;
+    background: unset;
+    background-size: unset;
+    color: unset;
+    font-size: unset;
+    font-weight: unset;
+    letter-spacing: unset;
+    text-transform: unset;
+    border-radius: unset;
+    white-space: unset;
+  }
+
+  /*
+   * Reset legacy checkbox input styling that lacks .unapi exclusion.
+   * The legacy rule `input[type="checkbox"] { vertical-align: middle; margin-right: 6px; }`
+   * applies globally, including inside .unapi, which can misalign Reka UI's
+   * hidden bubble input element inside UCheckbox components.
+   */
+  .unapi input[type="checkbox"] {
+    vertical-align: unset;
+    margin-right: unset;
+  }
+
+  /*
+   * Reset table cell line-height forced by DockerContainers.css on the Docker page.
+   * `table tbody td { line-height: normal; }` in the legacy CSS has no .unapi
+   * exclusion and would affect table rows in the new Docker UI.
+   */
+  .unapi table tbody td {
+    line-height: inherit;
+  }
+
   /* Accessible focus styles for keyboard navigation */
   .unapi button:focus-visible {
     outline: 2px solid #ff8c2f;
