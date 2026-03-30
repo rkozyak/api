@@ -1,17 +1,20 @@
 <script lang="ts" setup>
 import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { useQuery } from '@vue/apollo-composable';
+import { useMutation, useQuery } from '@vue/apollo-composable';
 
-import { ChevronLeftIcon, CircleStackIcon, InformationCircleIcon } from '@heroicons/vue/24/outline';
-import { ChevronDownIcon, ChevronRightIcon, ExclamationTriangleIcon } from '@heroicons/vue/24/solid';
-import { BrandButton } from '@unraid/ui';
+import { ChevronLeftIcon, CircleStackIcon } from '@heroicons/vue/24/outline';
+import { ArrowPathIcon, ChevronRightIcon } from '@heroicons/vue/24/solid';
+import { Accordion, BrandButton } from '@unraid/ui';
+import OnboardingLoadingState from '@/components/Onboarding/components/OnboardingLoadingState.vue';
+import { REFRESH_INTERNAL_BOOT_CONTEXT_MUTATION } from '@/components/Onboarding/graphql/refreshInternalBootContext.mutation';
 import { useOnboardingDraftStore } from '@/components/Onboarding/store/onboardingDraft';
-import { Disclosure, DisclosureButton, DisclosurePanel } from '@headlessui/vue';
+import { convert } from 'convert';
 
 import type {
   OnboardingBootMode,
   OnboardingInternalBootSelection,
+  OnboardingPoolMode,
 } from '@/components/Onboarding/store/onboardingDraft';
 import type { GetInternalBootContextQuery } from '~/composables/gql/graphql';
 
@@ -37,6 +40,7 @@ interface InternalBootDeviceOption {
   device: string;
   sizeMiB: number | null;
   ineligibilityCodes: InternalBootDiskEligibilityCode[];
+  warningCodes: InternalBootDiskWarningCode[];
 }
 
 interface InternalBootTemplateData {
@@ -51,36 +55,30 @@ interface InternalBootTemplateData {
   poolNames: string[];
 }
 
+interface SelectMenuItem {
+  value: string | number;
+  label: string;
+  disabled?: boolean;
+}
+
 type InternalBootTransferState = 'enabled' | 'disabled' | 'unknown';
 type InternalBootEligibilityState = 'eligible' | 'ineligible' | 'unknown';
 type InternalBootSystemEligibilityCode =
-  | 'ARRAY_NOT_STOPPED'
-  | 'ALREADY_INTERNAL_BOOT'
   | 'NO_UNASSIGNED_DISKS'
   | 'ENABLE_BOOT_TRANSFER_DISABLED'
   | 'ENABLE_BOOT_TRANSFER_UNKNOWN'
   | 'BOOT_ELIGIBLE_FALSE'
   | 'BOOT_ELIGIBLE_UNKNOWN';
-type InternalBootDiskEligibilityCode =
-  | 'ASSIGNED_TO_BOOT'
-  | 'ASSIGNED_TO_ARRAY'
-  | 'ASSIGNED_TO_PARITY'
-  | 'ASSIGNED_TO_CACHE'
-  | 'TOO_SMALL';
+type InternalBootDiskEligibilityCode = 'TOO_SMALL';
+type InternalBootDiskWarningCode = 'HAS_INTERNAL_BOOT_PARTITIONS';
+type InternalBootDiskIssueCode = InternalBootDiskEligibilityCode | InternalBootDiskWarningCode;
 
 const MIN_BOOT_SIZE_MIB = 4096;
-const MIN_ELIGIBLE_DEVICE_SIZE_MIB = MIN_BOOT_SIZE_MIB * 2;
+const MIN_DEDICATED_DEVICE_SIZE_MIB = 6144;
+const MIN_HYBRID_DEVICE_SIZE_MIB = MIN_BOOT_SIZE_MIB * 2;
 const DEFAULT_BOOT_SIZE_MIB = 16384;
 const BOOT_SIZE_PRESETS_MIB = [16384, 32768, 65536, 131072];
-const ASSIGNMENT_ELIGIBILITY_CODES = new Set<InternalBootDiskEligibilityCode>([
-  'ASSIGNED_TO_BOOT',
-  'ASSIGNED_TO_ARRAY',
-  'ASSIGNED_TO_PARITY',
-  'ASSIGNED_TO_CACHE',
-]);
 const SYSTEM_ELIGIBILITY_MESSAGE_KEYS: Record<InternalBootSystemEligibilityCode, string> = {
-  ARRAY_NOT_STOPPED: 'onboarding.internalBootStep.eligibility.codes.ARRAY_NOT_STOPPED',
-  ALREADY_INTERNAL_BOOT: 'onboarding.internalBootStep.eligibility.codes.ALREADY_INTERNAL_BOOT',
   NO_UNASSIGNED_DISKS: 'onboarding.internalBootStep.eligibility.codes.NO_UNASSIGNED_DISKS',
   ENABLE_BOOT_TRANSFER_DISABLED:
     'onboarding.internalBootStep.eligibility.codes.ENABLE_BOOT_TRANSFER_DISABLED',
@@ -89,12 +87,10 @@ const SYSTEM_ELIGIBILITY_MESSAGE_KEYS: Record<InternalBootSystemEligibilityCode,
   BOOT_ELIGIBLE_FALSE: 'onboarding.internalBootStep.eligibility.codes.BOOT_ELIGIBLE_FALSE',
   BOOT_ELIGIBLE_UNKNOWN: 'onboarding.internalBootStep.eligibility.codes.BOOT_ELIGIBLE_UNKNOWN',
 };
-const DISK_ELIGIBILITY_MESSAGE_KEYS: Record<InternalBootDiskEligibilityCode, string> = {
-  ASSIGNED_TO_BOOT: 'onboarding.internalBootStep.eligibility.codes.ASSIGNED_TO_BOOT',
-  ASSIGNED_TO_ARRAY: 'onboarding.internalBootStep.eligibility.codes.ASSIGNED_TO_ARRAY',
-  ASSIGNED_TO_PARITY: 'onboarding.internalBootStep.eligibility.codes.ASSIGNED_TO_PARITY',
-  ASSIGNED_TO_CACHE: 'onboarding.internalBootStep.eligibility.codes.ASSIGNED_TO_CACHE',
+const DISK_ISSUE_MESSAGE_KEYS: Record<InternalBootDiskIssueCode, string> = {
   TOO_SMALL: 'onboarding.internalBootStep.eligibility.codes.TOO_SMALL',
+  HAS_INTERNAL_BOOT_PARTITIONS:
+    'onboarding.internalBootStep.eligibility.codes.HAS_INTERNAL_BOOT_PARTITIONS',
 };
 
 const formatBytes = (bytes: number) => {
@@ -102,16 +98,9 @@ const formatBytes = (bytes: number) => {
     return t('onboarding.internalBootStep.unknownSize');
   }
 
-  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-
-  const precision = value >= 100 || unitIndex === 0 ? 0 : 1;
-  return `${value.toFixed(precision)} ${units[unitIndex]}`;
+  const converted = convert(bytes, 'B').to('best', 'metric');
+  const precision = converted.quantity >= 100 || converted.unit === 'B' ? 0 : 1;
+  return `${converted.quantity.toFixed(precision)} ${converted.unit}`;
 };
 
 const toSizeMiB = (bytes: number): number | null => {
@@ -144,105 +133,83 @@ const {
   result: contextResult,
   loading: contextLoading,
   error: contextError,
+  refetch: refetchContext,
 } = useQuery(GetInternalBootContextDocument, null, {
   fetchPolicy: 'network-only',
 });
+const { mutate: refreshInternalBootContextMutation } = useMutation(
+  REFRESH_INTERNAL_BOOT_CONTEXT_MUTATION
+);
 
 const formError = ref<string | null>(null);
 const hasInitializedForm = ref(false);
+const isRefreshingContext = ref(false);
 const bootMode = ref<OnboardingBootMode>(
   toBootMode(draftStore.bootMode ?? (draftStore.internalBootSelection ? 'storage' : 'usb'))
 );
 
+const poolMode = ref<OnboardingPoolMode>('dedicated');
 const poolName = ref('boot');
 const slotCount = ref(1);
-const selectedDevices = ref<string[]>(['']);
+const selectedDevices = ref<Array<string | undefined>>([undefined]);
 const bootSizePreset = ref<string>('');
 const customBootSizeGb = ref('');
 const updateBios = ref(true);
 
-const addDiskEligibilityCode = (
-  diskCodesByDevice: Map<string, Set<InternalBootDiskEligibilityCode>>,
-  deviceName: string | null | undefined,
-  code: InternalBootDiskEligibilityCode
-) => {
-  const normalizedDeviceName = normalizeDeviceName(deviceName);
-  if (!normalizedDeviceName) {
-    return;
-  }
-
-  const existingCodes = diskCodesByDevice.get(normalizedDeviceName);
-  if (existingCodes) {
-    existingCodes.add(code);
-    return;
-  }
-
-  diskCodesByDevice.set(normalizedDeviceName, new Set([code]));
-};
-
-const diskEligibilityCodesByDevice = computed(() => {
-  const data: GetInternalBootContextQuery | null | undefined = contextResult.value;
-  const codesByDevice = new Map<string, Set<InternalBootDiskEligibilityCode>>();
-  if (!data) {
-    return codesByDevice;
-  }
-
-  addDiskEligibilityCode(codesByDevice, data.array.boot?.device, 'ASSIGNED_TO_BOOT');
-  for (const parityDisk of data.array.parities) {
-    addDiskEligibilityCode(codesByDevice, parityDisk.device, 'ASSIGNED_TO_PARITY');
-  }
-  for (const arrayDisk of data.array.disks) {
-    addDiskEligibilityCode(codesByDevice, arrayDisk.device, 'ASSIGNED_TO_ARRAY');
-  }
-  for (const cacheDisk of data.array.caches) {
-    addDiskEligibilityCode(codesByDevice, cacheDisk.device, 'ASSIGNED_TO_CACHE');
-  }
-
-  return codesByDevice;
-});
+const internalBootContext = computed(() => contextResult.value?.internalBootContext ?? null);
 
 const templateData = computed<InternalBootTemplateData | null>(() => {
-  const data: GetInternalBootContextQuery | null | undefined = contextResult.value;
+  const data: GetInternalBootContextQuery['internalBootContext'] | null = internalBootContext.value;
   if (!data) {
     return null;
   }
 
-  const deviceOptions = data.disks
+  const deviceOptions = data.assignableDisks
     .map<InternalBootDeviceOption>((disk) => {
       const device = normalizeDeviceName(disk.device);
       const sizeBytes = disk.size;
       const sizeMiB = toSizeMiB(sizeBytes);
-      const ineligibilityCodes = Array.from(diskEligibilityCodesByDevice.value.get(device) ?? []);
+      const ineligibilityCodes: InternalBootDiskEligibilityCode[] = [];
+      const warningCodes: InternalBootDiskWarningCode[] = [];
+      const minEligibleDeviceSizeMiB =
+        poolMode.value === 'dedicated' ? MIN_DEDICATED_DEVICE_SIZE_MIB : MIN_HYBRID_DEVICE_SIZE_MIB;
 
-      if (sizeMiB !== null && sizeMiB < MIN_ELIGIBLE_DEVICE_SIZE_MIB) {
+      if (sizeMiB !== null && sizeMiB < minEligibleDeviceSizeMiB) {
         ineligibilityCodes.push('TOO_SMALL');
       }
 
       const serialNum = disk.serialNum?.trim() || '';
-      const emhttpDeviceId = disk.emhttpDeviceId?.trim() || '';
-      const optionValue = emhttpDeviceId || device;
-      const displayId = serialNum || emhttpDeviceId || device;
+      const diskId = disk.id?.trim() || '';
+      const optionValue = serialNum || diskId || device;
+      const displayId = serialNum || device;
       const sizeLabel = formatBytes(sizeBytes);
+      const matchingDriveWarning = data.driveWarnings.find(
+        (warning) => warning.diskId === diskId || normalizeDeviceName(warning.device) === device
+      );
+      if (matchingDriveWarning?.warnings.includes('HAS_INTERNAL_BOOT_PARTITIONS')) {
+        warningCodes.push('HAS_INTERNAL_BOOT_PARTITIONS');
+      }
       return {
         value: optionValue,
         label: buildDeviceLabel(displayId, sizeLabel, device),
         device,
         sizeMiB,
         ineligibilityCodes,
+        warningCodes,
       };
     })
     .filter((disk) => disk.device.length > 0);
 
   const poolNameSet = new Set<string>();
-  for (const cacheDisk of data.array.caches) {
-    const poolName = cacheDisk.name?.trim() || '';
+  for (const poolNameValue of data.poolNames) {
+    const poolName = poolNameValue?.trim() || '';
     if (poolName) {
       poolNameSet.add(poolName);
     }
   }
 
   const reservedNameSet = new Set<string>();
-  for (const reservedName of (data.vars?.reservedNames ?? '').split(',')) {
+  for (const reservedName of data.reservedNames) {
     const name = reservedName.trim();
     if (name) {
       reservedNameSet.add(name);
@@ -250,8 +217,8 @@ const templateData = computed<InternalBootTemplateData | null>(() => {
   }
 
   const shareNameSet = new Set<string>();
-  for (const share of data.shares) {
-    const name = share.name?.trim() || '';
+  for (const shareName of data.shareNames) {
+    const name = shareName?.trim() || '';
     if (name) {
       shareNameSet.add(name);
     }
@@ -270,11 +237,11 @@ const templateData = computed<InternalBootTemplateData | null>(() => {
   };
 });
 
-const isLoading = computed(() => Boolean(contextLoading.value));
+const isLoading = computed(() => Boolean(contextLoading.value) && !internalBootContext.value);
 const isBusy = computed(() => Boolean(props.isSavingStep) || isLoading.value);
 const isStepLocked = computed(() => Boolean(props.isSavingStep));
 const internalBootTransferState = computed<InternalBootTransferState>(() => {
-  const setting = contextResult.value?.vars?.enableBootTransfer;
+  const setting = internalBootContext.value?.enableBootTransfer;
   if (typeof setting !== 'string') {
     return 'unknown';
   }
@@ -288,11 +255,8 @@ const internalBootTransferState = computed<InternalBootTransferState>(() => {
   }
   return 'unknown';
 });
-const bootedFromFlashWithInternalBootSetup = computed(
-  () => contextResult.value?.vars?.bootedFromFlashWithInternalBootSetup === true
-);
 const bootEligibilityState = computed<InternalBootEligibilityState>(() => {
-  const eligibility = contextResult.value?.vars?.bootEligible;
+  const eligibility = internalBootContext.value?.bootEligible;
   if (eligibility === true) {
     return 'eligible';
   }
@@ -301,20 +265,9 @@ const bootEligibilityState = computed<InternalBootEligibilityState>(() => {
   }
   return 'unknown';
 });
-const isArrayStopped = computed(() => {
-  if (contextResult.value?.array.state) {
-    return contextResult.value.array.state === 'STOPPED';
-  }
-  return contextResult.value?.vars?.fsState === 'Stopped';
-});
 const allDeviceOptions = computed(() => templateData.value?.deviceOptions ?? []);
 const deviceOptions = computed(() =>
   allDeviceOptions.value.filter((option) => option.ineligibilityCodes.length === 0)
-);
-const unassignedDeviceOptions = computed(() =>
-  allDeviceOptions.value.filter(
-    (option) => !option.ineligibilityCodes.some((code) => ASSIGNMENT_ELIGIBILITY_CODES.has(code))
-  )
 );
 const slotOptions = computed(() => templateData.value?.slotOptions ?? [1, 2]);
 const reservedNames = computed(() => new Set(templateData.value?.reservedNames ?? []));
@@ -323,12 +276,6 @@ const existingPoolNames = computed(() => new Set(templateData.value?.poolNames ?
 const systemEligibilityCodes = computed<InternalBootSystemEligibilityCode[]>(() => {
   const codes: InternalBootSystemEligibilityCode[] = [];
 
-  if (!isArrayStopped.value) {
-    codes.push('ARRAY_NOT_STOPPED');
-  }
-  if (bootedFromFlashWithInternalBootSetup.value) {
-    codes.push('ALREADY_INTERNAL_BOOT');
-  }
   if (internalBootTransferState.value === 'disabled') {
     codes.push('ENABLE_BOOT_TRANSFER_DISABLED');
   }
@@ -341,7 +288,7 @@ const systemEligibilityCodes = computed<InternalBootSystemEligibilityCode[]>(() 
   if (bootEligibilityState.value === 'unknown') {
     codes.push('BOOT_ELIGIBLE_UNKNOWN');
   }
-  if (unassignedDeviceOptions.value.length === 0) {
+  if (allDeviceOptions.value.length === 0) {
     codes.push('NO_UNASSIGNED_DISKS');
   }
 
@@ -352,21 +299,38 @@ const diskEligibilityIssues = computed(() =>
     .filter((option) => option.ineligibilityCodes.length > 0)
     .map((option) => ({
       label: option.label,
-      codes: option.ineligibilityCodes,
+      codes: [...option.ineligibilityCodes],
     }))
+);
+const selectedDriveWarnings = computed(() =>
+  selectedDevices.value
+    .map((selectedDevice) => allDeviceOptions.value.find((option) => option.value === selectedDevice))
+    .filter((option): option is InternalBootDeviceOption => Boolean(option))
+    .filter((option) => option.warningCodes.length > 0)
 );
 
 const canConfigure = computed(
   () =>
     internalBootTransferState.value === 'enabled' &&
-    !bootedFromFlashWithInternalBootSetup.value &&
-    isArrayStopped.value &&
     bootEligibilityState.value === 'eligible' &&
     deviceOptions.value.length > 0
 );
 const hasEligibleDevices = computed(() => deviceOptions.value.length > 0);
 const hasNoEligibleDevices = computed(() => !hasEligibleDevices.value);
 const isStorageBootSelected = computed(() => bootMode.value === 'storage');
+const isDedicatedMode = computed(() => poolMode.value === 'dedicated');
+
+const poolModeItems = computed<SelectMenuItem[]>(() => [
+  {
+    value: 'dedicated',
+    label: t('onboarding.internalBootStep.poolMode.dedicated'),
+  },
+  {
+    value: 'hybrid',
+    label: t('onboarding.internalBootStep.poolMode.hybrid'),
+  },
+]);
+
 const isPrimaryActionDisabled = computed(
   () => isStepLocked.value || (isStorageBootSelected.value && (isLoading.value || !canConfigure.value))
 );
@@ -411,7 +375,9 @@ const deviceSizeById = computed(() => {
 });
 
 const selectedSlotDevices = computed(() =>
-  selectedDevices.value.slice(0, slotCount.value).filter((value) => value.length > 0)
+  selectedDevices.value
+    .slice(0, slotCount.value)
+    .filter((value): value is string => !!value && value.length > 0)
 );
 
 const smallestSelectedDeviceMiB = computed(() => {
@@ -462,6 +428,24 @@ const visiblePresetOptions = computed(() => {
   }));
 });
 
+const slotCountItems = computed<SelectMenuItem[]>(() =>
+  slotOptions.value.map((option) => ({
+    value: option,
+    label: String(option),
+  }))
+);
+
+const bootSizePresetItems = computed<SelectMenuItem[]>(() => [
+  ...visiblePresetOptions.value.map((option) => ({
+    value: option.value,
+    label: option.label,
+  })),
+  {
+    value: 'custom',
+    label: t('onboarding.internalBootStep.bootSize.custom'),
+  },
+]);
+
 const bootSizeMiB = computed(() => {
   if (bootSizePreset.value === 'custom') {
     const sizeGb = Number.parseInt(customBootSizeGb.value, 10);
@@ -488,7 +472,7 @@ const bootSizeHelpText = computed(() => {
 const normalizeSelectedDevices = (count: number) => {
   const nextDevices = selectedDevices.value.slice(0, count);
   while (nextDevices.length < count) {
-    nextDevices.push('');
+    nextDevices.push(undefined);
   }
   selectedDevices.value = nextDevices;
 };
@@ -548,7 +532,16 @@ watch(
 );
 
 watch(
-  [poolName, slotCount, selectedDevices, bootSizePreset, customBootSizeGb, updateBios, bootMode],
+  [
+    poolName,
+    slotCount,
+    selectedDevices,
+    bootSizePreset,
+    customBootSizeGb,
+    updateBios,
+    bootMode,
+    poolMode,
+  ],
   () => {
     if (formError.value) {
       formError.value = null;
@@ -556,39 +549,75 @@ watch(
   }
 );
 
+watch(poolMode, (mode) => {
+  slotCount.value = 1;
+  selectedDevices.value = [undefined];
+  updateBios.value = templateData.value?.defaultUpdateBios ?? true;
+  applyBootSizeSelection(templateData.value?.defaultBootSizeMiB ?? DEFAULT_BOOT_SIZE_MIB);
+
+  if (mode === 'dedicated') {
+    poolName.value = 'boot';
+    return;
+  }
+
+  poolName.value = templateData.value?.poolNameDefault ?? '';
+});
+
 const isDeviceDisabled = (deviceId: string, index: number) => {
   return selectedDevices.value.some(
     (selected, selectedIndex) => selectedIndex !== index && selected === deviceId
   );
 };
 
+const getDeviceSelectItems = (index: number): SelectMenuItem[] =>
+  deviceOptions.value.map((option) => ({
+    value: option.value,
+    label: option.label,
+    disabled: isDeviceDisabled(option.value, index),
+  }));
+
+const handleUpdateBiosChange = (value: boolean | 'indeterminate') => {
+  updateBios.value = value === true;
+};
+
 const buildValidatedSelection = (): OnboardingInternalBootSelection | null => {
-  const normalizedPoolName = poolName.value.trim();
-  if (!normalizedPoolName) {
-    formError.value = t('onboarding.internalBootStep.validation.poolRequired');
-    return null;
+  const currentPoolMode = poolMode.value;
+  const normalizedPoolName = currentPoolMode === 'dedicated' ? 'boot' : poolName.value.trim();
+
+  if (currentPoolMode === 'dedicated') {
+    if (reservedNames.value.has(normalizedPoolName) || existingPoolNames.value.has(normalizedPoolName)) {
+      formError.value = t('onboarding.internalBootStep.validation.dedicatedPoolNameConflict');
+      return null;
+    }
+  } else {
+    if (!normalizedPoolName) {
+      formError.value = t('onboarding.internalBootStep.validation.poolRequired');
+      return null;
+    }
+
+    if (reservedNames.value.has(normalizedPoolName)) {
+      formError.value = t('onboarding.internalBootStep.validation.poolReserved');
+      return null;
+    }
+
+    if (shareNames.value.has(normalizedPoolName)) {
+      formError.value = t('onboarding.internalBootStep.validation.poolShareName');
+      return null;
+    }
   }
 
-  if (reservedNames.value.has(normalizedPoolName)) {
-    formError.value = t('onboarding.internalBootStep.validation.poolReserved');
-    return null;
-  }
-
-  if (shareNames.value.has(normalizedPoolName)) {
-    formError.value = t('onboarding.internalBootStep.validation.poolShareName');
-    return null;
-  }
-
-  if (existingPoolNames.value.has(normalizedPoolName)) {
+  if (!isDedicatedMode.value && existingPoolNames.value.has(normalizedPoolName)) {
     formError.value = t('onboarding.internalBootStep.validation.poolExists');
     return null;
   }
 
-  const poolNameHasValidChars = /^[a-z][a-z0-9~._-]*$/.test(normalizedPoolName);
-  const poolNameHasValidEnding = /[a-z_-]$/.test(normalizedPoolName);
-  if (!poolNameHasValidChars || !poolNameHasValidEnding) {
-    formError.value = t('onboarding.internalBootStep.validation.poolFormat');
-    return null;
+  if (!isDedicatedMode.value) {
+    const poolNameHasValidChars = /^[a-z][a-z0-9~._-]*$/.test(normalizedPoolName);
+    const poolNameHasValidEnding = /[a-z_-]$/.test(normalizedPoolName);
+    if (!poolNameHasValidChars || !poolNameHasValidEnding) {
+      formError.value = t('onboarding.internalBootStep.validation.poolFormat');
+      return null;
+    }
   }
 
   if (slotCount.value < 1 || slotCount.value > 2) {
@@ -596,16 +625,28 @@ const buildValidatedSelection = (): OnboardingInternalBootSelection | null => {
     return null;
   }
 
-  const devices = selectedDevices.value.slice(0, slotCount.value);
-  if (devices.length !== slotCount.value || devices.some((device) => !device)) {
+  const rawDevices = selectedDevices.value.slice(0, slotCount.value);
+  if (rawDevices.length !== slotCount.value || rawDevices.some((device) => !device)) {
     formError.value = t('onboarding.internalBootStep.validation.devicePerSlot');
     return null;
   }
+  const devices = rawDevices.filter((d): d is string => !!d);
 
   const uniqueDevices = new Set(devices);
   if (uniqueDevices.size !== devices.length) {
     formError.value = t('onboarding.internalBootStep.validation.uniqueDevices');
     return null;
+  }
+
+  if (isDedicatedMode.value) {
+    return {
+      poolName: normalizedPoolName,
+      slotCount: slotCount.value,
+      devices,
+      bootSizeMiB: 0,
+      updateBios: updateBios.value,
+      poolMode: 'dedicated' as const,
+    };
   }
 
   const selectedBootSizeMiB = bootSizeMiB.value;
@@ -628,6 +669,7 @@ const buildValidatedSelection = (): OnboardingInternalBootSelection | null => {
     devices,
     bootSizeMiB: selectedBootSizeMiB,
     updateBios: updateBios.value,
+    poolMode: 'hybrid' as const,
   };
 };
 
@@ -636,11 +678,14 @@ const initializeForm = (data: InternalBootTemplateData) => {
   const firstSlot = data.slotOptions[0] ?? 1;
   const defaultSlot = Math.max(1, Math.min(2, firstSlot));
 
-  poolName.value = draftSelection?.poolName ?? data.poolNameDefault ?? 'cache';
+  poolMode.value = draftSelection?.poolMode ?? 'dedicated';
+  poolName.value =
+    draftSelection?.poolName ||
+    (poolMode.value === 'dedicated' ? 'boot' : (data.poolNameDefault ?? 'cache'));
   slotCount.value = draftSelection?.slotCount ?? defaultSlot;
   selectedDevices.value =
     draftSelection?.devices.slice(0, slotCount.value) ??
-    Array.from({ length: slotCount.value }, () => '');
+    Array.from({ length: slotCount.value }, (): string | undefined => undefined);
   normalizeSelectedDevices(slotCount.value);
 
   updateBios.value = draftSelection?.updateBios ?? data.defaultUpdateBios;
@@ -666,6 +711,7 @@ watch(
       return;
     }
 
+    poolMode.value = selection.poolMode ?? 'hybrid';
     poolName.value = selection.poolName;
     slotCount.value = selection.slotCount;
     selectedDevices.value = [...selection.devices];
@@ -717,6 +763,20 @@ const handlePrimaryAction = () => {
   props.onComplete();
 };
 
+const handleRefreshContext = async () => {
+  if (isRefreshingContext.value) {
+    return;
+  }
+
+  isRefreshingContext.value = true;
+  try {
+    await refreshInternalBootContextMutation();
+    await refetchContext();
+  } finally {
+    isRefreshingContext.value = false;
+  }
+};
+
 const primaryButtonText = computed(() => t('onboarding.internalBootStep.actions.continue'));
 </script>
 
@@ -737,49 +797,52 @@ const primaryButtonText = computed(() => t('onboarding.internalBootStep.actions.
         </div>
       </div>
 
-      <div class="space-y-3">
-        <label
-          class="border-muted bg-bg/50 has-[:checked]:border-primary has-[:checked]:bg-primary/5 flex cursor-pointer items-start gap-3 rounded-lg border p-4 transition-colors"
-        >
-          <input
-            v-model="bootMode"
-            type="radio"
-            value="usb"
-            class="accent-primary mt-0.5 h-4 w-4"
-            :disabled="isStepLocked"
-          />
-          <div class="space-y-1">
-            <p class="text-highlighted text-sm font-semibold">
-              {{ t('onboarding.internalBootStep.options.usb') }}
-            </p>
-          </div>
-        </label>
-        <label
-          class="border-muted bg-bg/50 has-[:checked]:border-primary has-[:checked]:bg-primary/5 flex cursor-pointer items-start gap-3 rounded-lg border p-4 transition-colors"
-        >
-          <input
-            v-model="bootMode"
-            type="radio"
-            value="storage"
-            class="accent-primary mt-0.5 h-4 w-4"
-            :disabled="isStepLocked"
-          />
-          <div class="space-y-1">
-            <p class="text-highlighted text-sm font-semibold">
-              {{ t('onboarding.internalBootStep.options.storage') }}
-            </p>
-          </div>
-        </label>
-      </div>
+      <URadioGroup
+        v-model="bootMode"
+        :items="[
+          { label: t('onboarding.internalBootStep.options.usb'), value: 'usb' },
+          { label: t('onboarding.internalBootStep.options.storage'), value: 'storage' },
+        ]"
+        :disabled="isStepLocked"
+        variant="card"
+      />
 
-      <blockquote
-        v-if="isStorageBootSelected && hasEligibleDevices"
+      <UAlert
+        v-if="isStorageBootSelected && canConfigure && isDedicatedMode"
         data-testid="internal-boot-intro-panel"
-        class="my-8 rounded-xl border border-sky-200 bg-sky-50 p-5"
+        class="my-8"
+        color="neutral"
+        variant="subtle"
+        icon="i-lucide-info"
       >
-        <div class="flex items-start gap-3">
-          <InformationCircleIcon class="mt-0.5 h-6 w-6 flex-shrink-0 text-sky-700" />
-          <div class="space-y-3 text-sm leading-relaxed text-sky-950">
+        <template #description>
+          <div class="space-y-3 text-sm leading-relaxed">
+            <p class="font-semibold">
+              {{ t('onboarding.internalBootStep.warning.dedicatedModeTitle') }}
+            </p>
+            <p>{{ t('onboarding.internalBootStep.warning.dedicatedPoolDescription') }}</p>
+            <p>{{ t('onboarding.internalBootStep.warning.bootMirrorDescription') }}</p>
+            <p>{{ t('onboarding.internalBootStep.warning.dedicatedMirrorSize') }}</p>
+            <p class="font-semibold">
+              {{ t('onboarding.internalBootStep.warning.dedicatedDevicesFormatted') }}
+            </p>
+          </div>
+        </template>
+      </UAlert>
+
+      <UAlert
+        v-if="isStorageBootSelected && canConfigure && !isDedicatedMode"
+        data-testid="internal-boot-intro-panel"
+        class="my-8"
+        color="neutral"
+        variant="subtle"
+        icon="i-lucide-info"
+      >
+        <template #description>
+          <div class="space-y-3 text-sm leading-relaxed">
+            <p class="font-semibold">
+              {{ t('onboarding.internalBootStep.warning.hybridModeTitle') }}
+            </p>
             <p>{{ t('onboarding.internalBootStep.warning.bootablePoolDescription') }}</p>
             <p>{{ t('onboarding.internalBootStep.warning.bootablePoolVolumes') }}</p>
             <ul class="list-disc space-y-1 pl-5">
@@ -794,176 +857,235 @@ const primaryButtonText = computed(() => t('onboarding.internalBootStep.actions.
               {{ t('onboarding.internalBootStep.warning.selectedDevicesFormatted') }}
             </p>
           </div>
-        </div>
-      </blockquote>
+        </template>
+      </UAlert>
 
-      <div
-        v-if="isStorageBootSelected && isLoading"
-        class="text-muted rounded-lg border border-dashed p-4 text-sm"
-      >
-        {{ t('onboarding.internalBootStep.loadingOptions') }}
+      <div v-if="isStorageBootSelected && isLoading" class="mt-2">
+        <OnboardingLoadingState
+          compact
+          :title="t('common.loading')"
+          :description="t('onboarding.internalBootStep.loadingOptions')"
+        />
       </div>
 
       <div
         v-else-if="isStorageBootSelected && contextError"
-        class="rounded-lg border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-900 dark:border-yellow-800 dark:bg-yellow-900/10 dark:text-yellow-200"
+        role="alert"
+        class="border-muted bg-muted/40 text-foreground rounded-lg border p-4 text-sm"
       >
         {{ loadStatusMessage }}
       </div>
 
-      <div v-if="isStorageBootSelected && !isLoading && !contextError && canConfigure" class="space-y-5">
-        <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
-          <label class="space-y-2">
-            <span class="text-muted text-sm font-medium">
-              {{ t('onboarding.internalBootStep.fields.poolName') }}
-            </span>
-            <input
-              v-model="poolName"
-              type="text"
-              maxlength="40"
-              class="border-muted bg-bg focus:ring-primary w-full rounded-md border px-3 py-2 text-sm focus:ring-2 focus:outline-none"
-              :disabled="isBusy"
-            />
-          </label>
+      <div v-if="isStorageBootSelected && !isLoading && !contextError" class="mt-6 flex justify-end">
+        <UButton
+          data-testid="internal-boot-refresh-button"
+          type="button"
+          color="neutral"
+          variant="ghost"
+          size="sm"
+          :disabled="isBusy || isRefreshingContext"
+          @click="handleRefreshContext"
+        >
+          <ArrowPathIcon class="h-4 w-4" :class="{ 'animate-spin': isRefreshingContext }" />
+          {{ t('onboarding.internalBootStep.actions.refreshState', 'Refresh state') }}
+        </UButton>
+      </div>
 
-          <label class="space-y-2">
-            <span class="text-muted text-sm font-medium">
-              {{ t('onboarding.internalBootStep.fields.slots') }}
-            </span>
-            <select
-              v-model.number="slotCount"
-              class="border-muted bg-bg focus:ring-primary w-full rounded-md border px-3 py-2 text-sm focus:ring-2 focus:outline-none"
-              :disabled="isBusy"
-            >
-              <option v-for="option in slotOptions" :key="option" :value="option">{{ option }}</option>
-            </select>
-          </label>
+      <div v-if="isStorageBootSelected && !isLoading && !contextError && canConfigure" class="space-y-5">
+        <div class="space-y-3">
+          <h3 class="text-highlighted text-sm font-bold tracking-wider uppercase">
+            {{ t('onboarding.internalBootStep.sections.poolSettings') }}
+          </h3>
+          <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
+            <label class="space-y-2">
+              <span class="text-muted text-sm font-medium">
+                {{ t('onboarding.internalBootStep.fields.poolMode') }}
+              </span>
+              <USelectMenu
+                v-model="poolMode"
+                :items="poolModeItems"
+                label-key="label"
+                value-key="value"
+                :search-input="false"
+                :disabled="isBusy"
+                class="w-full"
+                :ui="{ content: 'z-[100]' }"
+              />
+            </label>
+
+            <label v-if="!isDedicatedMode" class="space-y-2">
+              <span class="text-muted text-sm font-medium">
+                {{ t('onboarding.internalBootStep.fields.dataPoolName') }}
+              </span>
+              <UInput v-model="poolName" type="text" maxlength="40" :disabled="isBusy" class="w-full" />
+            </label>
+          </div>
         </div>
 
         <div class="space-y-3">
           <h3 class="text-highlighted text-sm font-bold tracking-wider uppercase">
-            {{ t('onboarding.internalBootStep.fields.devices') }}
+            {{ t('onboarding.internalBootStep.sections.devices') }}
           </h3>
+          <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
+            <label class="space-y-2">
+              <span class="text-muted text-sm font-medium">
+                {{ t('onboarding.internalBootStep.fields.slots') }}
+              </span>
+              <USelectMenu
+                :model-value="slotCount"
+                :items="slotCountItems"
+                label-key="label"
+                value-key="value"
+                :search-input="false"
+                :disabled="isBusy"
+                class="w-full"
+                :ui="{ content: 'z-[100]' }"
+                @update:model-value="
+                  (val: unknown) => {
+                    const n = Number(val);
+                    if (Number.isFinite(n) && n >= 1) slotCount = n;
+                  }
+                "
+              />
+            </label>
+          </div>
+
           <div v-for="index in slotCount" :key="index" class="space-y-2">
             <label class="text-muted text-sm font-medium">{{
               t('onboarding.internalBootStep.fields.deviceSlot', { index })
             }}</label>
-            <select
+            <USelectMenu
               v-model="selectedDevices[index - 1]"
-              class="border-muted bg-bg focus:ring-primary w-full rounded-md border px-3 py-2 text-sm focus:ring-2 focus:outline-none"
+              :items="getDeviceSelectItems(index - 1)"
+              label-key="label"
+              value-key="value"
+              :search-input="false"
+              :placeholder="t('onboarding.internalBootStep.fields.selectDevice')"
               :disabled="isBusy"
-            >
-              <option value="">{{ t('onboarding.internalBootStep.fields.selectDevice') }}</option>
-              <option
-                v-for="option in deviceOptions"
-                :key="option.value"
-                :value="option.value"
-                :disabled="isDeviceDisabled(option.value, index - 1)"
-              >
-                {{ option.label }}
-              </option>
-            </select>
+              class="w-full"
+              :ui="{ content: 'z-[100]' }"
+            />
           </div>
         </div>
 
-        <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
-          <label class="space-y-2">
-            <span class="text-muted text-sm font-medium">
-              {{ t('onboarding.internalBootStep.fields.bootReservedSize') }}
-            </span>
-            <select
-              v-model="bootSizePreset"
-              class="border-muted bg-bg focus:ring-primary w-full rounded-md border px-3 py-2 text-sm focus:ring-2 focus:outline-none"
-              :disabled="isBusy"
-            >
-              <option v-for="option in visiblePresetOptions" :key="option.value" :value="option.value">
-                {{ option.label }}
-              </option>
-              <option value="custom">{{ t('onboarding.internalBootStep.bootSize.custom') }}</option>
-            </select>
-          </label>
+        <UAlert
+          v-if="selectedDriveWarnings.length > 0"
+          data-testid="internal-boot-drive-warning"
+          color="warning"
+          variant="outline"
+          icon="i-lucide-triangle-alert"
+        >
+          <template #description>
+            <div class="space-y-2">
+              <p class="font-semibold">
+                {{ t('onboarding.internalBootStep.warning.driveWarningsTitle') }}
+              </p>
+              <p>{{ t('onboarding.internalBootStep.warning.driveWarningsDescription') }}</p>
+              <ul class="list-disc space-y-1 pl-5">
+                <li v-for="option in selectedDriveWarnings" :key="option.value">
+                  {{ option.label }}
+                </li>
+              </ul>
+            </div>
+          </template>
+        </UAlert>
 
-          <label class="space-y-2">
-            <span class="text-muted text-sm font-medium">
-              {{ t('onboarding.internalBootStep.fields.customSizeGb') }}
-            </span>
-            <input
-              v-model="customBootSizeGb"
-              type="number"
-              min="4"
-              :max="maxCustomBootSizeGb ?? undefined"
-              class="border-muted bg-bg focus:ring-primary w-full rounded-md border px-3 py-2 text-sm focus:ring-2 focus:outline-none"
-              :disabled="isBusy || bootSizePreset !== 'custom'"
-            />
-          </label>
-        </div>
+        <template v-if="!isDedicatedMode">
+          <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
+            <label class="space-y-2">
+              <span class="text-muted text-sm font-medium">
+                {{ t('onboarding.internalBootStep.fields.bootReservedSize') }}
+              </span>
+              <USelectMenu
+                v-model="bootSizePreset"
+                :items="bootSizePresetItems"
+                label-key="label"
+                value-key="value"
+                :search-input="false"
+                :disabled="isBusy"
+                class="w-full"
+                :ui="{ content: 'z-[100]' }"
+              />
+            </label>
 
-        <p class="text-muted text-xs">{{ bootSizeHelpText }}</p>
+            <label v-if="bootSizePreset === 'custom'" class="space-y-2">
+              <span class="text-muted text-sm font-medium">
+                {{ t('onboarding.internalBootStep.fields.customSizeGb') }}
+              </span>
+              <UInput
+                v-model="customBootSizeGb"
+                type="number"
+                min="4"
+                :max="maxCustomBootSizeGb ?? undefined"
+                :disabled="isBusy"
+                class="w-full"
+              />
+            </label>
+          </div>
+
+          <p class="text-muted text-xs">{{ bootSizeHelpText }}</p>
+        </template>
 
         <label class="flex items-center gap-3 text-sm">
-          <input
-            v-model="updateBios"
-            type="checkbox"
-            class="accent-primary h-4 w-4"
+          <UCheckbox
+            :model-value="updateBios"
             :disabled="isBusy"
+            @update:model-value="handleUpdateBiosChange"
           />
           <span class="text-highlighted font-medium">{{
             t('onboarding.internalBootStep.fields.updateBios')
           }}</span>
         </label>
-        <blockquote
+        <UAlert
           v-if="updateBios"
           data-testid="internal-boot-update-bios-warning"
-          class="border-s-4 border-yellow-500 bg-yellow-100 p-4"
+          color="neutral"
+          variant="outline"
+          icon="i-lucide-triangle-alert"
         >
-          <div class="flex items-start gap-2">
-            <ExclamationTriangleIcon class="mt-0.5 h-5 w-5 flex-shrink-0 text-yellow-700" />
-            <p class="text-sm leading-relaxed text-yellow-900">
+          <template #description>
+            <p class="text-sm leading-relaxed">
               {{ t('onboarding.internalBootStep.warning.updateBios') }}
             </p>
-          </div>
-        </blockquote>
+          </template>
+        </UAlert>
       </div>
 
       <div
         v-if="isStorageBootSelected && !isLoading && shouldShowEligibilityDetails"
         data-testid="internal-boot-eligibility-panel"
-        class="mt-6 rounded-lg border border-yellow-200 bg-yellow-50 text-sm text-yellow-900 dark:border-yellow-800 dark:bg-yellow-900/10 dark:text-yellow-200"
+        class="border-muted bg-muted/40 text-foreground mt-6 rounded-lg border text-sm"
       >
-        <Disclosure v-slot="{ open }">
-          <DisclosureButton
-            data-testid="internal-boot-eligibility-toggle"
-            class="flex w-full items-start justify-between gap-4 p-4 text-left"
-          >
-            <div class="space-y-1">
-              <p class="font-semibold">{{ eligibilityPanelTitle }}</p>
-              <p v-if="eligibilityPanelDescription">{{ eligibilityPanelDescription }}</p>
+        <Accordion
+          :items="[{ value: 'eligibility', title: eligibilityPanelTitle }]"
+          type="single"
+          collapsible
+          class="border-none"
+          item-class="border-none"
+          trigger-class="pr-4 hover:no-underline"
+        >
+          <template #trigger="{ open }">
+            <div
+              data-testid="internal-boot-eligibility-toggle"
+              class="flex w-full items-center justify-between gap-4 p-4 text-left"
+            >
+              <div class="space-y-1">
+                <p class="font-semibold">{{ eligibilityPanelTitle }}</p>
+                <p v-if="eligibilityPanelDescription">{{ eligibilityPanelDescription }}</p>
+              </div>
+              <div class="flex items-center gap-2 text-sm font-medium whitespace-nowrap">
+                <span>
+                  {{
+                    open
+                      ? t('onboarding.internalBootStep.eligibility.hideDetails')
+                      : t('onboarding.internalBootStep.eligibility.showDetails')
+                  }}
+                </span>
+              </div>
             </div>
-            <div class="flex items-center gap-2 text-sm font-medium whitespace-nowrap">
-              <span>
-                {{
-                  open
-                    ? t('onboarding.internalBootStep.eligibility.hideDetails')
-                    : t('onboarding.internalBootStep.eligibility.showDetails')
-                }}
-              </span>
-              <ChevronDownIcon
-                :class="[
-                  open ? 'rotate-180 transform' : '',
-                  'h-5 w-5 transition-transform duration-200',
-                ]"
-              />
-            </div>
-          </DisclosureButton>
-          <transition
-            enter-active-class="transition duration-100 ease-out"
-            enter-from-class="transform scale-95 opacity-0"
-            enter-to-class="transform scale-100 opacity-100"
-            leave-active-class="transition duration-75 ease-out"
-            leave-from-class="transform scale-100 opacity-100"
-            leave-to-class="transform scale-95 opacity-0"
-          >
-            <DisclosurePanel class="space-y-4 border-t border-yellow-200 px-4 pt-4 pb-4">
+          </template>
+          <template #content>
+            <div class="border-muted space-y-4 border-t px-4 pt-4 pb-4">
               <div v-if="systemEligibilityCodes.length > 0" class="space-y-2">
                 <p class="font-semibold">
                   {{ t('onboarding.internalBootStep.eligibility.systemTitle') }}
@@ -988,15 +1110,15 @@ const primaryButtonText = computed(() => t('onboarding.internalBootStep.actions.
                         <code class="rounded bg-black/10 px-1.5 py-0.5 text-xs font-semibold">
                           {{ code }}
                         </code>
-                        {{ t(DISK_ELIGIBILITY_MESSAGE_KEYS[code]) }}
+                        {{ t(DISK_ISSUE_MESSAGE_KEYS[code]) }}
                       </li>
                     </ul>
                   </li>
                 </ul>
               </div>
-            </DisclosurePanel>
-          </transition>
-        </Disclosure>
+            </div>
+          </template>
+        </Accordion>
       </div>
 
       <div
@@ -1012,8 +1134,8 @@ const primaryButtonText = computed(() => t('onboarding.internalBootStep.actions.
         <button
           v-if="showBack"
           @click="handleBack"
-          class="text-muted hover:text-toned group flex w-full items-center justify-center gap-2 font-medium transition-colors sm:w-auto sm:justify-start"
-          :disabled="isBusy"
+          class="text-muted hover:text-toned group flex w-full items-center justify-center gap-2 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto sm:justify-start"
+          :disabled="isStepLocked"
         >
           <ChevronLeftIcon class="h-5 w-5 transition-transform group-hover:-translate-x-0.5" />
           {{ t('common.back') }}
@@ -1024,8 +1146,8 @@ const primaryButtonText = computed(() => t('onboarding.internalBootStep.actions.
           <button
             v-if="showSkip"
             @click="handleSkip"
-            class="text-muted hover:text-highlighted text-sm font-medium transition-colors sm:mr-2"
-            :disabled="isBusy"
+            class="text-muted hover:text-highlighted text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:mr-2"
+            :disabled="isStepLocked"
           >
             {{ t('common.skipForNow', 'Skip for now') }}
           </button>

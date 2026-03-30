@@ -39,7 +39,6 @@ const mockUseMutation = vi.fn(() => {
 });
 
 const mockSend = vi.fn();
-const mockPurge = vi.fn();
 const mockSetError = vi.fn();
 
 vi.mock('~/store/callbackActions', () => ({
@@ -55,20 +54,21 @@ vi.mock('~/store/errors', () => ({
   }),
 }));
 
-vi.mock('~/store/replaceRenew', () => ({
-  useReplaceRenewStore: () => ({
-    purgeValidationResponse: mockPurge,
-  }),
-}));
-
 vi.mock('~/store/server', () => ({
   useServerStore: () => ({
     serverAccountPayload: {
       guid: 'test-guid',
+      keyfile: 'test-keyfile',
       name: 'test-server',
     },
     serverReplacePayload: {
+      activationCodeData: {
+        code: 'PARTNER-CODE-123',
+        partner: 'Partner Name',
+        system: 'Partner System',
+      },
       guid: 'test-tpm-guid',
+      keyfile: 'test-keyfile',
       name: 'test-server',
     },
     inIframe: false,
@@ -103,33 +103,28 @@ describe('Account Store', () => {
       expect(mockSend).toHaveBeenCalledTimes(1);
       expect(mockSend).toHaveBeenCalledWith(
         ACCOUNT_CALLBACK.toString(),
-        [{ server: { guid: 'test-guid', name: 'test-server' }, type: 'manage' }],
+        [
+          {
+            server: { guid: 'test-guid', keyfile: 'test-keyfile', name: 'test-server' },
+            type: 'manage',
+          },
+        ],
         undefined,
         'post'
       );
     });
 
-    it('should call myKeys action correctly', async () => {
-      await store.myKeys();
-
-      expect(mockPurge).toHaveBeenCalledTimes(1);
+    it('should call myKeys action correctly', () => {
+      store.myKeys();
       expect(mockSend).toHaveBeenCalledTimes(1);
       expect(mockSend).toHaveBeenCalledWith(
         ACCOUNT_CALLBACK.toString(),
-        [{ server: { guid: 'test-guid', name: 'test-server' }, type: 'myKeys' }],
-        undefined,
-        'post'
-      );
-    });
-
-    it('should call linkKey action correctly', async () => {
-      await store.linkKey();
-
-      expect(mockPurge).toHaveBeenCalledTimes(1);
-      expect(mockSend).toHaveBeenCalledTimes(1);
-      expect(mockSend).toHaveBeenCalledWith(
-        ACCOUNT_CALLBACK.toString(),
-        [{ server: { guid: 'test-guid', name: 'test-server' }, type: 'linkKey' }],
+        [
+          {
+            server: { guid: 'test-guid', keyfile: 'test-keyfile', name: 'test-server' },
+            type: 'myKeys',
+          },
+        ],
         undefined,
         'post'
       );
@@ -140,7 +135,12 @@ describe('Account Store', () => {
       expect(mockSend).toHaveBeenCalledTimes(1);
       expect(mockSend).toHaveBeenCalledWith(
         ACCOUNT_CALLBACK.toString(),
-        [{ server: { guid: 'test-guid', name: 'test-server' }, type: 'recover' }],
+        [
+          {
+            server: { guid: 'test-guid', keyfile: 'test-keyfile', name: 'test-server' },
+            type: 'recover',
+          },
+        ],
         undefined,
         'post'
       );
@@ -152,7 +152,12 @@ describe('Account Store', () => {
       expect(mockSend).toHaveBeenCalledTimes(1);
       expect(mockSend).toHaveBeenCalledWith(
         ACCOUNT_CALLBACK.toString(),
-        [{ server: { guid: 'test-guid', name: 'test-server' }, type: 'signIn' }],
+        [
+          {
+            server: { guid: 'test-guid', keyfile: 'test-keyfile', name: 'test-server' },
+            type: 'signIn',
+          },
+        ],
         undefined,
         'post'
       );
@@ -164,7 +169,12 @@ describe('Account Store', () => {
       expect(mockSend).toHaveBeenCalledTimes(1);
       expect(mockSend).toHaveBeenCalledWith(
         ACCOUNT_CALLBACK.toString(),
-        [{ server: { guid: 'test-guid', name: 'test-server' }, type: 'signOut' }],
+        [
+          {
+            server: { guid: 'test-guid', keyfile: 'test-keyfile', name: 'test-server' },
+            type: 'signOut',
+          },
+        ],
         undefined,
         'post'
       );
@@ -175,7 +185,12 @@ describe('Account Store', () => {
 
       expect(mockSend).toHaveBeenCalledWith(
         ACCOUNT_CALLBACK.toString(),
-        [{ server: { guid: 'test-guid', name: 'test-server' }, type: 'downgradeOs' }],
+        [
+          {
+            server: { guid: 'test-guid', keyfile: 'test-keyfile', name: 'test-server' },
+            type: 'downgradeOs',
+          },
+        ],
         undefined,
         'post'
       );
@@ -184,7 +199,12 @@ describe('Account Store', () => {
 
       expect(mockSend).toHaveBeenCalledWith(
         ACCOUNT_CALLBACK.toString(),
-        [{ server: { guid: 'test-guid', name: 'test-server' }, type: 'downgradeOs' }],
+        [
+          {
+            server: { guid: 'test-guid', keyfile: 'test-keyfile', name: 'test-server' },
+            type: 'downgradeOs',
+          },
+        ],
         'replace',
         'post'
       );
@@ -195,7 +215,12 @@ describe('Account Store', () => {
 
       expect(mockSend).toHaveBeenCalledWith(
         ACCOUNT_CALLBACK.toString(),
-        [{ server: { guid: 'test-guid', name: 'test-server' }, type: 'updateOs' }],
+        [
+          {
+            server: { guid: 'test-guid', keyfile: 'test-keyfile', name: 'test-server' },
+            type: 'updateOs',
+          },
+        ],
         undefined,
         'post'
       );
@@ -204,7 +229,12 @@ describe('Account Store', () => {
 
       expect(mockSend).toHaveBeenCalledWith(
         ACCOUNT_CALLBACK.toString(),
-        [{ server: { guid: 'test-guid', name: 'test-server' }, type: 'updateOs' }],
+        [
+          {
+            server: { guid: 'test-guid', keyfile: 'test-keyfile', name: 'test-server' },
+            type: 'updateOs',
+          },
+        ],
         'replace',
         'post'
       );
@@ -216,13 +246,18 @@ describe('Account Store', () => {
       expect(mockSend).toHaveBeenCalledTimes(1);
       expect(mockSend).toHaveBeenCalledWith(
         ACCOUNT_CALLBACK.toString(),
-        [{ server: { guid: 'test-guid', name: 'test-server' }, type: 'replace' }],
+        [
+          {
+            server: { guid: 'test-guid', keyfile: 'test-keyfile', name: 'test-server' },
+            type: 'replace',
+          },
+        ],
         undefined,
         'post'
       );
     });
 
-    it('should call replaceTpm action correctly', () => {
+    it('should forward the full server payload for replaceTpm', () => {
       store.replaceTpm();
 
       expect(mockSend).toHaveBeenCalledTimes(1);
@@ -230,7 +265,16 @@ describe('Account Store', () => {
         ACCOUNT_CALLBACK.toString(),
         [
           {
-            server: { guid: 'test-tpm-guid', name: 'test-server' },
+            server: {
+              activationCodeData: {
+                code: 'PARTNER-CODE-123',
+                partner: 'Partner Name',
+                system: 'Partner System',
+              },
+              guid: 'test-tpm-guid',
+              keyfile: 'test-keyfile',
+              name: 'test-server',
+            },
             type: 'replace',
           },
         ],
@@ -245,7 +289,12 @@ describe('Account Store', () => {
       expect(mockSend).toHaveBeenCalledTimes(1);
       expect(mockSend).toHaveBeenCalledWith(
         ACCOUNT_CALLBACK.toString(),
-        [{ server: { guid: 'test-guid', name: 'test-server' }, type: 'trialExtend' }],
+        [
+          {
+            server: { guid: 'test-guid', keyfile: 'test-keyfile', name: 'test-server' },
+            type: 'trialExtend',
+          },
+        ],
         undefined,
         'post'
       );
@@ -257,7 +306,12 @@ describe('Account Store', () => {
       expect(mockSend).toHaveBeenCalledTimes(1);
       expect(mockSend).toHaveBeenCalledWith(
         ACCOUNT_CALLBACK.toString(),
-        [{ server: { guid: 'test-guid', name: 'test-server' }, type: 'trialStart' }],
+        [
+          {
+            server: { guid: 'test-guid', keyfile: 'test-keyfile', name: 'test-server' },
+            type: 'trialStart',
+          },
+        ],
         undefined,
         'post'
       );

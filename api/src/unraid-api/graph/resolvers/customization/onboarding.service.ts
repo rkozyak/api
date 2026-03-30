@@ -6,8 +6,9 @@ import { plainToClass } from 'class-transformer';
 import { validateOrReject } from 'class-validator';
 import { GraphQLError } from 'graphql';
 import * as ini from 'ini';
+import coerce from 'semver/functions/coerce.js';
+import gte from 'semver/functions/gte.js';
 
-import { emcmd } from '@app/core/utils/clients/emcmd.js';
 import { fileExists } from '@app/core/utils/files/file-exists.js';
 import { safelySerializeObjectToIni } from '@app/core/utils/files/safe-ini-serializer.js';
 import { loadDynamixConfigFromDiskSync } from '@app/store/actions/load-dynamix-config-file.js';
@@ -31,6 +32,8 @@ import {
 import { Theme, ThemeName } from '@app/unraid-api/graph/resolvers/customization/theme.model.js';
 import { getOnboardingVersionDirection } from '@app/unraid-api/graph/resolvers/onboarding/onboarding-status.util.js';
 
+const MIN_ONBOARDING_VERSION = '7.3.0';
+
 @Injectable()
 export class OnboardingService implements OnModuleInit {
     private readonly logger = new Logger(OnboardingService.name);
@@ -39,7 +42,6 @@ export class OnboardingService implements OnModuleInit {
     private activationDir!: string;
     private configFile!: string;
     private caseModelCfg!: string;
-    private identCfg!: string;
     private activationJsonPath: string | null = null;
     private materializedPartnerMedia: Record<'banner' | 'caseModel', boolean> = {
         banner: false,
@@ -72,7 +74,6 @@ export class OnboardingService implements OnModuleInit {
         this.activationDir = paths.activationBase;
         this.configFile = paths['dynamix-config']?.[1];
         this.caseModelCfg = paths.boot?.caseModelConfig;
-        this.identCfg = paths.identConfig;
 
         this.logger.log('OnboardingService initialized with paths from store.');
 
@@ -356,6 +357,9 @@ export class OnboardingService implements OnModuleInit {
         const partnerInfo = await this.getPublicPartnerInfo();
         const onboardingState = await this.getOnboardingState();
         const versionDirection = getOnboardingVersionDirection(state.completedAtVersion, currentVersion);
+        const isForceOpen = state.forceOpen ?? false;
+        const isBypassed = this.onboardingTracker.isBypassed();
+        const shouldAutoOpen = this.isVersionSupported(currentVersion) && !state.completed;
 
         let status: OnboardingStatus;
         if (!state.completed) {
@@ -377,6 +381,7 @@ export class OnboardingService implements OnModuleInit {
             completed: state.completed,
             completedAtVersion: state.completedAtVersion,
             activationCode,
+            shouldOpen: !isBypassed && (isForceOpen || shouldAutoOpen),
             onboardingState,
         };
     }
@@ -389,8 +394,50 @@ export class OnboardingService implements OnModuleInit {
         await this.onboardingTracker.reset();
     }
 
+    public async openOnboarding(): Promise<void> {
+        this.onboardingTracker.setBypassActive(false);
+        await this.onboardingTracker.setForceOpen(true);
+    }
+
+    public async closeOnboarding(): Promise<void> {
+        const trackerStateResult = await this.onboardingTracker.getStateResult();
+        if (trackerStateResult.kind === 'error') {
+            throw trackerStateResult.error;
+        }
+
+        const state = trackerStateResult.state;
+        const currentVersion = this.onboardingTracker.getCurrentVersion();
+        const shouldAutoOpen = this.isVersionSupported(currentVersion) && !state.completed;
+
+        if (state.forceOpen) {
+            await this.onboardingTracker.setForceOpen(false);
+        }
+
+        if (shouldAutoOpen) {
+            await this.onboardingTracker.markCompleted();
+        }
+    }
+
+    public async bypassOnboarding(): Promise<void> {
+        this.onboardingTracker.setBypassActive(true);
+    }
+
+    public async resumeOnboarding(): Promise<void> {
+        this.onboardingTracker.setBypassActive(false);
+    }
+
     public isFreshInstall(): boolean {
         return this.onboardingState.isFreshInstall();
+    }
+
+    private isVersionSupported(version: string | undefined): boolean {
+        const normalizedVersion = coerce(version);
+        const normalizedMinVersion = coerce(MIN_ONBOARDING_VERSION);
+        if (!normalizedVersion || !normalizedMinVersion) {
+            return false;
+        }
+
+        return gte(normalizedVersion, normalizedMinVersion);
     }
 
     /**
@@ -864,59 +911,6 @@ export class OnboardingService implements OnModuleInit {
             }
         } catch (error) {
             this.logger.error('Error applying case model:', error);
-        }
-    }
-
-    private async applyServerIdentity() {
-        if (!this.activationData) {
-            this.logger.warn('No activation data available for server identity setup.');
-            return;
-        }
-
-        this.logger.log('Applying server identity...');
-        // Ideally, get current values from Redux store instead of var.ini
-        // Assuming EmhttpState type provides structure for emhttp slice. Adjust if necessary.
-        // Using optional chaining ?. in case emhttp or var is not defined in the state yet.
-        const currentEmhttpState = getters.emhttp();
-        const currentName = currentEmhttpState?.var?.name || '';
-        // Skip sending sysModel to emcmd for now
-        const currentSysModel = '';
-        const currentComment = currentEmhttpState?.var?.comment || '';
-
-        this.logger.debug(
-            `Current identity - Name: ${currentName}, Model: ${currentSysModel}, Comment: ${currentComment}`
-        );
-
-        const { serverName, model: sysModel, comment } = this.activationData.system || {};
-        const paramsToUpdate: Record<string, string> = {
-            ...(serverName && { NAME: serverName }),
-            ...(sysModel && { SYS_MODEL: sysModel }),
-            ...(comment !== undefined && { COMMENT: comment }),
-        };
-
-        if (Object.keys(paramsToUpdate).length === 0) {
-            this.logger.log('No server identity information found in activation data.');
-            return;
-        }
-
-        this.logger.log('Updating server identity:', paramsToUpdate);
-
-        try {
-            // Trigger emhttp update via emcmd
-            const updateParams = {
-                ...paramsToUpdate,
-                changeNames: 'Apply',
-                // Can be null string
-                server_name: '',
-                // Can be null string
-                server_addr: '',
-            };
-            this.logger.log(`Calling emcmd with params: %o`, updateParams);
-            await emcmd(updateParams, { waitForToken: true });
-
-            this.logger.log('emcmd executed successfully.');
-        } catch (error: unknown) {
-            this.logger.error('Error applying server identity: %o', error);
         }
     }
 

@@ -346,11 +346,6 @@ type Disk implements Node {
   """The serial number of the disk"""
   serialNum: String!
 
-  """
-  Device identifier from emhttp devs.ini used by disk assignment commands
-  """
-  emhttpDeviceId: String
-
   """The interface type of the disk"""
   interfaceType: DiskInterfaceType!
 
@@ -1051,6 +1046,9 @@ type Onboarding {
   """The activation code from the .activationcode file, if present"""
   activationCode: String
 
+  """Whether the onboarding modal should currently be shown"""
+  shouldOpen: Boolean!
+
   """Runtime onboarding state values used by the onboarding flow"""
   onboardingState: OnboardingState!
 }
@@ -1078,6 +1076,26 @@ type OnboardingInternalBootResult {
   ok: Boolean!
   code: Int
   output: String!
+}
+
+"""Warning metadata for an assignable internal boot drive"""
+type OnboardingInternalBootDriveWarning {
+  diskId: String!
+  device: String!
+  warnings: [String!]!
+}
+
+"""Current onboarding context for configuring internal boot"""
+type OnboardingInternalBootContext {
+  arrayStopped: Boolean!
+  bootEligible: Boolean
+  bootedFromFlashWithInternalBootSetup: Boolean!
+  enableBootTransfer: String
+  reservedNames: [String!]!
+  shareNames: [String!]!
+  poolNames: [String!]!
+  assignableDisks: [Disk!]!
+  driveWarnings: [OnboardingInternalBootDriveWarning!]!
 }
 
 type RCloneDrive {
@@ -1386,6 +1404,18 @@ type OnboardingMutations {
   """Reset onboarding progress (for testing)"""
   resetOnboarding: Onboarding!
 
+  """Force the onboarding modal open"""
+  openOnboarding: Onboarding!
+
+  """Close the onboarding modal"""
+  closeOnboarding: Onboarding!
+
+  """Temporarily bypass onboarding in API memory"""
+  bypassOnboarding: Onboarding!
+
+  """Clear the temporary onboarding bypass"""
+  resumeOnboarding: Onboarding!
+
   """Override onboarding state for testing (in-memory only)"""
   setOnboardingOverride(input: OnboardingOverrideInput!): Onboarding!
 
@@ -1394,6 +1424,11 @@ type OnboardingMutations {
 
   """Create and configure internal boot pool via emcmd operations"""
   createInternalBootPool(input: CreateInternalBootPoolInput!): OnboardingInternalBootResult!
+
+  """
+  Refresh the internal boot onboarding context from the latest emhttp state
+  """
+  refreshInternalBootContext: OnboardingInternalBootContext!
 }
 
 """Onboarding override input for testing"""
@@ -1408,6 +1443,7 @@ input OnboardingOverrideInput {
 input OnboardingOverrideCompletionInput {
   completed: Boolean
   completedAtVersion: String
+  forceOpen: Boolean
 }
 
 """Activation code override input"""
@@ -3162,6 +3198,9 @@ type Query {
   notifications: Notifications!
   online: Boolean!
   owner: Owner!
+
+  """Get the latest onboarding context for configuring internal boot"""
+  internalBootContext: OnboardingInternalBootContext!
   registration: Registration
   server: Server
   servers: [Server!]!
@@ -3181,6 +3220,7 @@ type Query {
   info: Info!
   docker: Docker!
   disks: [Disk!]!
+  assignableDisks: [Disk!]!
   disk(id: PrefixedID!): Disk!
   rclone: RCloneBackupSettings!
   logFiles: [LogFile!]!

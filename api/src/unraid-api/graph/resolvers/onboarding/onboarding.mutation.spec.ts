@@ -17,25 +17,38 @@ describe('OnboardingMutationsResolver', () => {
     const onboardingService = {
         markOnboardingCompleted: vi.fn(),
         resetOnboarding: vi.fn(),
+        openOnboarding: vi.fn(),
+        closeOnboarding: vi.fn(),
+        bypassOnboarding: vi.fn(),
+        resumeOnboarding: vi.fn(),
         getOnboardingResponse: vi.fn(),
         clearActivationDataCache: vi.fn(),
     } satisfies Pick<
         OnboardingService,
         | 'markOnboardingCompleted'
         | 'resetOnboarding'
+        | 'openOnboarding'
+        | 'closeOnboarding'
+        | 'bypassOnboarding'
+        | 'resumeOnboarding'
         | 'getOnboardingResponse'
         | 'clearActivationDataCache'
     >;
 
     const onboardingInternalBootService = {
         createInternalBootPool: vi.fn(),
-    } satisfies Pick<OnboardingInternalBootService, 'createInternalBootPool'>;
+        refreshInternalBootContext: vi.fn(),
+    } satisfies Pick<
+        OnboardingInternalBootService,
+        'createInternalBootPool' | 'refreshInternalBootContext'
+    >;
 
     const defaultOnboardingResponse = {
         status: OnboardingStatus.INCOMPLETE,
         isPartnerBuild: false,
         completed: false,
         completedAtVersion: undefined,
+        shouldOpen: false,
         onboardingState: {
             registrationState: null,
             isRegistered: false,
@@ -58,6 +71,10 @@ describe('OnboardingMutationsResolver', () => {
         vi.clearAllMocks();
         onboardingService.markOnboardingCompleted.mockResolvedValue(undefined);
         onboardingService.resetOnboarding.mockResolvedValue(undefined);
+        onboardingService.openOnboarding.mockResolvedValue(undefined);
+        onboardingService.closeOnboarding.mockResolvedValue(undefined);
+        onboardingService.bypassOnboarding.mockResolvedValue(undefined);
+        onboardingService.resumeOnboarding.mockResolvedValue(undefined);
         onboardingService.getOnboardingResponse.mockResolvedValue(defaultOnboardingResponse);
 
         resolver = createResolver();
@@ -95,6 +112,54 @@ describe('OnboardingMutationsResolver', () => {
 
         await expect(resolver.resetOnboarding()).resolves.toEqual(response);
         expect(onboardingService.resetOnboarding).toHaveBeenCalledTimes(1);
+        expect(onboardingService.getOnboardingResponse).toHaveBeenCalledWith();
+    });
+
+    it('delegates openOnboarding through the onboarding service', async () => {
+        const response = {
+            ...defaultOnboardingResponse,
+            shouldOpen: true,
+        };
+        onboardingService.getOnboardingResponse.mockResolvedValue(response);
+
+        await expect(resolver.openOnboarding()).resolves.toEqual(response);
+        expect(onboardingService.openOnboarding).toHaveBeenCalledTimes(1);
+        expect(onboardingService.getOnboardingResponse).toHaveBeenCalledWith();
+    });
+
+    it('delegates closeOnboarding through the onboarding service', async () => {
+        const response = {
+            ...defaultOnboardingResponse,
+            shouldOpen: false,
+        };
+        onboardingService.getOnboardingResponse.mockResolvedValue(response);
+
+        await expect(resolver.closeOnboarding()).resolves.toEqual(response);
+        expect(onboardingService.closeOnboarding).toHaveBeenCalledTimes(1);
+        expect(onboardingService.getOnboardingResponse).toHaveBeenCalledWith();
+    });
+
+    it('delegates bypassOnboarding through the onboarding service', async () => {
+        const response = {
+            ...defaultOnboardingResponse,
+            shouldOpen: false,
+        };
+        onboardingService.getOnboardingResponse.mockResolvedValue(response);
+
+        await expect(resolver.bypassOnboarding()).resolves.toEqual(response);
+        expect(onboardingService.bypassOnboarding).toHaveBeenCalledTimes(1);
+        expect(onboardingService.getOnboardingResponse).toHaveBeenCalledWith();
+    });
+
+    it('delegates resumeOnboarding through the onboarding service', async () => {
+        const response = {
+            ...defaultOnboardingResponse,
+            shouldOpen: true,
+        };
+        onboardingService.getOnboardingResponse.mockResolvedValue(response);
+
+        await expect(resolver.resumeOnboarding()).resolves.toEqual(response);
+        expect(onboardingService.resumeOnboarding).toHaveBeenCalledTimes(1);
         expect(onboardingService.getOnboardingResponse).toHaveBeenCalledWith();
     });
 
@@ -160,5 +225,32 @@ describe('OnboardingMutationsResolver', () => {
             output: 'done',
         });
         expect(onboardingInternalBootService.createInternalBootPool).toHaveBeenCalledWith(input);
+    });
+
+    it('delegates refreshInternalBootContext to onboarding internal boot service', async () => {
+        onboardingInternalBootService.refreshInternalBootContext.mockResolvedValue({
+            arrayStopped: true,
+            bootEligible: true,
+            bootedFromFlashWithInternalBootSetup: false,
+            enableBootTransfer: 'yes',
+            reservedNames: [],
+            shareNames: [],
+            poolNames: [],
+            assignableDisks: [],
+            driveWarnings: [],
+        });
+
+        await expect(resolver.refreshInternalBootContext()).resolves.toEqual({
+            arrayStopped: true,
+            bootEligible: true,
+            bootedFromFlashWithInternalBootSetup: false,
+            enableBootTransfer: 'yes',
+            reservedNames: [],
+            shareNames: [],
+            poolNames: [],
+            assignableDisks: [],
+            driveWarnings: [],
+        });
+        expect(onboardingInternalBootService.refreshInternalBootContext).toHaveBeenCalledWith();
     });
 });

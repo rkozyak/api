@@ -24,7 +24,7 @@ import dayjs from 'dayjs';
 import prerelease from 'semver/functions/prerelease';
 
 import type { ApolloQueryResult } from '@apollo/client/core/index.js';
-import type { ServerActionTypes, ServerData } from '@unraid/shared-callbacks';
+import type { ConnectState, ServerActionTypes, ServerData } from '@unraid/shared-callbacks';
 import type { Config, PartialCloudFragment, ServerStateQuery } from '~/composables/gql/graphql';
 import type { Error } from '~/store/errors';
 import type { Theme } from '~/themes/types';
@@ -231,34 +231,27 @@ export const useServerStore = defineStore('server', () => {
     };
   });
 
-  const serverPurchasePayload = computed((): ServerData => {
-    const server: ServerData = {
-      description: description.value,
-      deviceCount: deviceCount.value,
-      expireTime: expireTime.value,
-      flashProduct: flashProduct.value,
-      flashVendor: flashVendor.value,
-      guid: guid.value,
-      locale: locale.value,
-      name: name.value,
-      osVersion: osVersion.value,
-      osVersionBranch: osVersionBranch.value,
-      registered: registered.value ?? false,
-      regExp: regExp.value,
-      regGen: regGen.value,
-      regGuid: regGuid.value,
-      regTy: regTy.value,
-      regUpdatesExpired: regUpdatesExpired.value,
-      state: state.value,
-      wanFQDN: wanFQDN.value,
-    };
-    return server;
-  });
+  const getConnectState = (): ConnectState | undefined => {
+    const connectState = cloud.value?.minigraphql.status;
 
-  const serverAccountPayload = computed((): ServerData => {
-    return {
-      deviceCount: deviceCount.value,
+    switch (connectState) {
+      case 'PRE_INIT':
+      case 'CONNECTING':
+      case 'CONNECTED':
+      case 'PING_FAILURE':
+      case 'ERROR_RETRYING':
+        return connectState;
+      default:
+        return undefined;
+    }
+  };
+
+  const buildServerCallbackPayload = (overrides: Partial<ServerData> = {}): ServerData => {
+    const payload: ServerData = {
+      connectPluginVersion: connectPluginVersion.value || undefined,
+      connectState: getConnectState(),
       description: description.value,
+      deviceCount: deviceCount.value,
       expireTime: expireTime.value,
       flashProduct: flashProduct.value,
       flashVendor: flashVendor.value,
@@ -269,20 +262,47 @@ export const useServerStore = defineStore('server', () => {
       osVersion: osVersion.value,
       osVersionBranch: osVersionBranch.value,
       registered: registered.value ?? false,
+      regExp: regExp.value,
       regGen: regGen.value,
       regGuid: regGuid.value,
-      regExp: regExp.value,
       regTy: regTy.value,
       regUpdatesExpired: regUpdatesExpired.value,
       state: state.value,
       wanFQDN: wanFQDN.value,
+      ...overrides,
     };
-  });
+
+    const activationCodeValue = activationCode.value;
+    if (!activationCodeValue) {
+      return payload;
+    }
+
+    const { code, partner, system } = activationCodeValue;
+    const activationCodeData = {
+      ...(code ? { code } : {}),
+      ...(partner ? { partner } : {}),
+      ...(system ? { system } : {}),
+    };
+
+    if (!Object.keys(activationCodeData).length) {
+      return payload;
+    }
+
+    return {
+      ...payload,
+      activationCodeData,
+    };
+  };
+
+  const serverPurchasePayload = computed((): ServerData => buildServerCallbackPayload());
+
+  const serverAccountPayload = computed((): ServerData => buildServerCallbackPayload());
 
   const serverReplacePayload = computed(
     (): ServerData => ({
-      ...serverAccountPayload.value,
-      guid: replaceFlashGuid.value,
+      ...buildServerCallbackPayload({
+        guid: replaceFlashGuid.value,
+      }),
     })
   );
 

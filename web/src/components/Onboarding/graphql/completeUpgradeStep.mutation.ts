@@ -8,6 +8,7 @@ export const COMPLETE_ONBOARDING_MUTATION = graphql(/* GraphQL */ `
         isPartnerBuild
         completed
         completedAtVersion
+        shouldOpen
       }
     }
   }

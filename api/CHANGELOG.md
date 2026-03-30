@@ -1,5 +1,94 @@
 # Changelog
 
+## [4.31.1](https://github.com/unraid/api/compare/v4.31.0...v4.31.1) (2026-03-23)
+
+
+### Bug Fixes
+
+* **onboarding:** separate apply and completion flows ([#1948](https://github.com/unraid/api/issues/1948)) ([5be53a4](https://github.com/unraid/api/commit/5be53a4e53f2daa606dc6d1e27e19471f42cae5d))
+* reload var state when emhttp writes temp files ([#1950](https://github.com/unraid/api/issues/1950)) ([7265105](https://github.com/unraid/api/commit/7265105b0ff5de42cce174c3de1569c629f07721))
+* **state-watch:** watch canonical ini files atomically ([#1953](https://github.com/unraid/api/issues/1953)) ([6471b3f](https://github.com/unraid/api/commit/6471b3f542f549e90e7051f332294ed2b2807890))
+
+## [4.31.0](https://github.com/unraid/api/compare/v4.30.1...v4.31.0) (2026-03-23)
+
+
+### Features
+
+* **api:** support encrypted array start inputs ([#1944](https://github.com/unraid/api/issues/1944)) ([018a8d5](https://github.com/unraid/api/commit/018a8d5251ad4b69bb11763296ca97dbbeb26582))
+* **onboarding:** add shared loading states ([#1945](https://github.com/unraid/api/issues/1945)) ([776c8cc](https://github.com/unraid/api/commit/776c8cc8083c64ab7d682eb9a6dd288214581fb5))
+* Serverside state for onboarding display ([#1936](https://github.com/unraid/api/issues/1936)) ([682d51c](https://github.com/unraid/api/commit/682d51c41ba0e18d07ab63080ae5f4cfa298eb7f))
+
+
+### Bug Fixes
+
+* **api:** reconcile emhttp state without spinning disks ([#1946](https://github.com/unraid/api/issues/1946)) ([d3e0b95](https://github.com/unraid/api/commit/d3e0b9560d3d71348953241fb6ae37c49d645d5a))
+* **onboarding:** auto-open incomplete onboarding on 7.3+ ([#1940](https://github.com/unraid/api/issues/1940)) ([f0241a8](https://github.com/unraid/api/commit/f0241a8ef3f70d3a5a395439513b30e2e9812120))
+* **onboarding:** replace internal boot native selects ([#1942](https://github.com/unraid/api/issues/1942)) ([d6ea032](https://github.com/unraid/api/commit/d6ea032c7f5cc687f7952d4deec39a4c2040ea3a))
+* preserve onboarding resume state on reload ([#1941](https://github.com/unraid/api/issues/1941)) ([91f7fe9](https://github.com/unraid/api/commit/91f7fe9759e0eb84de301b3373bf5eaffd9071b4))
+* recover VM availability after reconnect ([#1947](https://github.com/unraid/api/issues/1947)) ([e064de7](https://github.com/unraid/api/commit/e064de7d3701edbad1b397a8558f16115ea0bb81))
+* Unify callback server payloads ([#1938](https://github.com/unraid/api/issues/1938)) ([f58fcc0](https://github.com/unraid/api/commit/f58fcc028ce745764d28f0409525b5ec08da57ad))
+
+## [4.30.1](https://github.com/unraid/api/compare/v4.30.0...v4.30.1) (2026-03-18)
+
+
+### Bug Fixes
+
+* **web:** unify UPC license actions into manage/trial entry ([#1929](https://github.com/unraid/api/issues/1929)) ([164198c](https://github.com/unraid/api/commit/164198c25def22c99e475d301ef71b7ca2ac1615))
+
+## [4.30.0](https://github.com/unraid/api/compare/v4.29.2...v4.30.0) (2026-03-18)
+
+
+### Features
+
+* add internal boot step to onboarding flow ([#1881](https://github.com/unraid/api/issues/1881)) ([337aecc](https://github.com/unraid/api/commit/337aecc5c008c6f593df0665e3048885a8756357))
+* Add TPM licensing availability to registration ([#1908](https://github.com/unraid/api/issues/1908)) ([aa162eb](https://github.com/unraid/api/commit/aa162eb297b32f3597c1565691327be53975ab30))
+* add UPS power ([#1874](https://github.com/unraid/api/issues/1874)) ([b531aed](https://github.com/unraid/api/commit/b531aed73934cc589f296d492e4fa2f674578a1b))
+* **api:** alert when usb boot has internal boot target ([#1898](https://github.com/unraid/api/issues/1898)) ([b94df47](https://github.com/unraid/api/commit/b94df47fc7b7682a6c531c312d6cdf2ff3341289))
+* **api:** expose internal boot devices in array GraphQL ([#1894](https://github.com/unraid/api/issues/1894)) ([0736709](https://github.com/unraid/api/commit/07367093e7117463610bda7b91e9ac2ed49b579a))
+* docker overview ([#1855](https://github.com/unraid/api/issues/1855)) ([9ef1cf1](https://github.com/unraid/api/commit/9ef1cf1eca96254350d9152d43f05ad11dd3811e))
+* **docker:** add update actions to container context menu ([#1867](https://github.com/unraid/api/issues/1867)) ([4ca3e06](https://github.com/unraid/api/commit/4ca3e06fae391942c46ed9aa93ecbc5e714e3e73))
+* **docker:** disable containers page file modification ([#1870](https://github.com/unraid/api/issues/1870)) ([aaa0372](https://github.com/unraid/api/commit/aaa03721044349d86f2d5c6ef72f51637c37de18))
+* issues/1597: Temperature Monitoring - Thanks @MitchellThompkins ([a1be458](https://github.com/unraid/api/commit/a1be4582009011fe8c2dd022ca7827a5147cc4d9))
+* New Crowdin updates ([#1809](https://github.com/unraid/api/issues/1809)) ([a7b3f07](https://github.com/unraid/api/commit/a7b3f07fd829ec3373d5ec8d1095635ed1069cdb))
+* New Crowdin updates ([#1883](https://github.com/unraid/api/issues/1883)) ([14a8fa8](https://github.com/unraid/api/commit/14a8fa8d494b47a1d60191f992dca6d887c0d6e3))
+* **onboarding:** add new onboarding flows for Unraid OS ([#1746](https://github.com/unraid/api/issues/1746)) ([15bd747](https://github.com/unraid/api/commit/15bd74777634145a2247df31b288a84ffb71ec8d))
+* registration and trial actions use Account app ([#1928](https://github.com/unraid/api/issues/1928)) ([c2c0425](https://github.com/unraid/api/commit/c2c04252234cd762e2fcc866afa0a5ccbc517428))
+* share internal boot state ([#1921](https://github.com/unraid/api/issues/1921)) ([8e4d44d](https://github.com/unraid/api/commit/8e4d44d0c3bfe89e91cd5cdd6a276b8d2214d14d))
+* **web:** show TPM move control for trial licenses ([#1911](https://github.com/unraid/api/issues/1911)) ([d00fb63](https://github.com/unraid/api/commit/d00fb63602654ef67d6d0ae3c61f27552ed63bda))
+
+
+### Bug Fixes
+
+* Add dedicated TPM license move option ([#1909](https://github.com/unraid/api/issues/1909)) ([36c56f7](https://github.com/unraid/api/commit/36c56f762343604272b4f25769638b02d49a1960))
+* allow free USB targets in onboarding internal boot setup ([#1903](https://github.com/unraid/api/issues/1903)) ([298da54](https://github.com/unraid/api/commit/298da54120b0f78db6b79921e08b4e4ffa754654))
+* API key key display truncation ([#1890](https://github.com/unraid/api/issues/1890)) ([b12f75c](https://github.com/unraid/api/commit/b12f75c49342913441c380bf8e71106b6542b73b))
+* **api:** harden PHP wrapper args for newer PHP versions ([#1901](https://github.com/unraid/api/issues/1901)) ([849f177](https://github.com/unraid/api/commit/849f177ec852876143d680f509edb3a6ca01b6ec))
+* **api:** prevent flash notification startup fd exhaustion ([#1893](https://github.com/unraid/api/issues/1893)) ([4b231ad](https://github.com/unraid/api/commit/4b231adda4ee300685e7370e3f3e767ad78d7570))
+* clear stale onboarding modal session state ([#1904](https://github.com/unraid/api/issues/1904)) ([23f7836](https://github.com/unraid/api/commit/23f78366642106277239f2f23d770259cfe78416))
+* consistently clear onboarding draft ([#1916](https://github.com/unraid/api/issues/1916)) ([199d803](https://github.com/unraid/api/commit/199d80332ddad53d5ba98c995df95afd224832bf))
+* correct graphql-api.log timestamp formatting ([#1918](https://github.com/unraid/api/issues/1918)) ([243c5a8](https://github.com/unraid/api/commit/243c5a8c481dd430d5ef11905846c85b8eb9c34f))
+* **deps:** pin dependencies ([#1878](https://github.com/unraid/api/issues/1878)) ([db88eb8](https://github.com/unraid/api/commit/db88eb8ca92b5231c7f01e23c39d95c4cdbf9925))
+* **docker:** change "visit" to "webui" & use correct link ([#1863](https://github.com/unraid/api/issues/1863)) ([cab0880](https://github.com/unraid/api/commit/cab0880263f3b59a8974e64a9c28c10e3608678f))
+* **docker:** improve start/stop UX with visual feedback ([#1865](https://github.com/unraid/api/issues/1865)) ([c084e25](https://github.com/unraid/api/commit/c084e25db9eae3cc47f4803861a867feeaf4509f))
+* **docker:** remove aggressive caching to ensure data correctness ([#1864](https://github.com/unraid/api/issues/1864)) ([1c1bae8](https://github.com/unraid/api/commit/1c1bae8ce1c1ffc478e62acb176565a1e524e74c))
+* **docker:** sync template mappings in organizer to prevent false orphan warnings ([#1866](https://github.com/unraid/api/issues/1866)) ([38a6f0c](https://github.com/unraid/api/commit/38a6f0c380e7a84b1dd08170419dad557ed0880f))
+* onboarding internal-boot warning panel contrast and semantics ([#1927](https://github.com/unraid/api/issues/1927)) ([bb6f241](https://github.com/unraid/api/commit/bb6f2419d196449f492c5d9bbdae44f16cfc4952))
+* **onboarding:** add explicit EFI loader path for flash entry ([#1926](https://github.com/unraid/api/issues/1926)) ([429b438](https://github.com/unraid/api/commit/429b4384a57a0793f019a0d5d8ea13e556fa9646))
+* **onboarding:** extend onboarding refresh timeout ([#1925](https://github.com/unraid/api/issues/1925)) ([e2a5f44](https://github.com/unraid/api/commit/e2a5f44dc4a8fa07e1aae5383ecf6f7a65963d3c))
+* **onboarding:** persist installed plugins in summary ([#1915](https://github.com/unraid/api/issues/1915)) ([07f4ebd](https://github.com/unraid/api/commit/07f4ebdf8f2da679512d74c917410ab761e4c757))
+* **onboarding:** refine storage boot setup UX ([#1900](https://github.com/unraid/api/issues/1900)) ([1108d0a](https://github.com/unraid/api/commit/1108d0a5956677abe94b3aa8ed0230e83c8064ff))
+* polish onboarding flow ([#1902](https://github.com/unraid/api/issues/1902)) ([8742cac](https://github.com/unraid/api/commit/8742cac0602aa67cc9d3eba3cdcfaed6980e714f))
+* preserve registration device limits after refresh ([#1905](https://github.com/unraid/api/issues/1905)) ([234bfc7](https://github.com/unraid/api/commit/234bfc717f83beded89b1367e76eca9600bcdeda))
+* prevent onboarding on API errors ([#1917](https://github.com/unraid/api/issues/1917)) ([540d6f9](https://github.com/unraid/api/commit/540d6f99b3cf2a4382163aa9ae7c73dfd82812ce))
+* remap TPM guid prefix to 01 ([#1924](https://github.com/unraid/api/issues/1924)) ([5360b5b](https://github.com/unraid/api/commit/5360b5b4255e6c51dd775c948f776ab9ac807055))
+* Return null for corrupted/invalid API key files and add Connect fixtures test ([#1886](https://github.com/unraid/api/issues/1886)) ([013e6c5](https://github.com/unraid/api/commit/013e6c5b416d28e5dfd473728a636ddc547b1560))
+* share internal boot state across onboarding ([#1920](https://github.com/unraid/api/issues/1920)) ([f9b293f](https://github.com/unraid/api/commit/f9b293f7962816898e2ce710c90bf3df851e645e))
+* too many file descriptors with thousands of notifications ([#1887](https://github.com/unraid/api/issues/1887)) ([7956987](https://github.com/unraid/api/commit/79569872e89214db1414cfa118505b6aefddc988))
+* Treat onboarding patch updates as completed ([#1884](https://github.com/unraid/api/issues/1884)) ([d03b25e](https://github.com/unraid/api/commit/d03b25ebf8ca7c33c70c59e9c07f82553342f5cd))
+* unify onboarding internal boot state refresh ([#1923](https://github.com/unraid/api/issues/1923)) ([d3032c1](https://github.com/unraid/api/commit/d3032c18782a27666811b230ca2025579d02c96a))
+* **web:** refresh internal boot onboarding state ([#1913](https://github.com/unraid/api/issues/1913)) ([1ca2129](https://github.com/unraid/api/commit/1ca21291b80ac212957a55c403744b4c990eaed2))
+* **web:** stop showing callback errors after successful key installs ([#1892](https://github.com/unraid/api/issues/1892)) ([45f1402](https://github.com/unraid/api/commit/45f140207a03047121e5003fc23e311ef6c077ed))
+
 ## [4.29.2](https://github.com/unraid/api/compare/v4.29.1...v4.29.2) (2025-12-19)
 
 

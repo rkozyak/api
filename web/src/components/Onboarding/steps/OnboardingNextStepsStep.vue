@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useMutation } from '@vue/apollo-composable';
 
 import {
   BookOpenIcon,
@@ -13,12 +14,18 @@ import {
   WrenchScrewdriverIcon,
 } from '@heroicons/vue/24/outline';
 import { CheckCircleIcon, EnvelopeIcon } from '@heroicons/vue/24/solid';
-import { BrandButton, Dialog } from '@unraid/ui';
+import { BrandButton } from '@unraid/ui';
 // Use ?raw to import SVG content string
 import UnraidIconSvg from '@/assets/partners/simple-icons-unraid.svg?raw';
-import { submitInternalBootReboot } from '@/components/Onboarding/composables/internalBoot';
+import InternalBootConfirmDialog from '@/components/Onboarding/components/InternalBootConfirmDialog.vue';
+import {
+  submitInternalBootReboot,
+  submitInternalBootShutdown,
+} from '@/components/Onboarding/composables/internalBoot';
+import { COMPLETE_ONBOARDING_MUTATION } from '@/components/Onboarding/graphql/completeUpgradeStep.mutation';
 import { useActivationCodeDataStore } from '@/components/Onboarding/store/activationCodeData';
 import { useOnboardingDraftStore } from '@/components/Onboarding/store/onboardingDraft';
+import { useOnboardingStore } from '@/components/Onboarding/store/onboardingStatus';
 import { cleanupOnboardingStorage } from '@/components/Onboarding/store/onboardingStorageCleanup';
 
 export interface Props {
@@ -31,6 +38,8 @@ const props = defineProps<Props>();
 const { t } = useI18n();
 const store = useActivationCodeDataStore();
 const draftStore = useOnboardingDraftStore();
+const { mutate: completeOnboarding } = useMutation(COMPLETE_ONBOARDING_MUTATION);
+const { refetchOnboarding } = useOnboardingStore();
 
 const partnerInfo = computed(() => store.partnerInfo);
 const activationCode = computed(() => store.activationCode);
@@ -49,13 +58,24 @@ const hasExtraLinks = computed(() => (partnerInfo.value?.partner?.extraLinks?.le
 // Check if we have any content to show in the "Learn about your server" section
 // Only show if there are LINKS (docs or extra links) - system specs alone isn't enough
 const hasAnyPartnerContent = computed(() => hasCoreDocsLinks.value || hasExtraLinks.value);
-const showRebootButton = computed(() => draftStore.internalBootApplySucceeded);
+const showRebootButton = computed(() => draftStore.internalBootSelection !== null);
+const internalBootFailed = computed(
+  () =>
+    draftStore.internalBootSelection !== null &&
+    draftStore.internalBootApplyAttempted &&
+    !draftStore.internalBootApplySucceeded
+);
+const biosUpdateMissed = computed(
+  () => internalBootFailed.value && (draftStore.internalBootSelection?.updateBios ?? false)
+);
 const primaryButtonText = computed(() =>
   showRebootButton.value
     ? t('onboarding.nextSteps.reboot')
     : t('onboarding.nextSteps.continueToDashboard')
 );
-const showRebootWarningDialog = ref(false);
+const pendingPowerAction = ref<'reboot' | 'shutdown' | null>(null);
+const isCompleting = ref(false);
+const completionError = ref<string | null>(null);
 
 const basicsItems = [
   { label: t('onboarding.nextSteps.basics.shares'), url: 'https://docs.unraid.net/go/shares/' },
@@ -84,23 +104,70 @@ const handleMouseMove = (e: MouseEvent) => {
   el.style.setProperty('--y', `${y}px`);
 };
 
-const handlePrimaryAction = () => {
-  if (showRebootButton.value) {
-    showRebootWarningDialog.value = true;
+const finishOnboarding = async ({ action }: { action?: 'reboot' | 'shutdown' } = {}) => {
+  if (isCompleting.value) {
+    return;
+  }
+
+  isCompleting.value = true;
+  completionError.value = null;
+
+  try {
+    await completeOnboarding();
+
+    try {
+      await refetchOnboarding();
+    } catch (error: unknown) {
+      console.error('Failed to refresh onboarding state:', error);
+    }
+  } catch (error: unknown) {
+    console.error('Failed to complete onboarding:', error);
+    if (!action) {
+      completionError.value = t('onboarding.nextSteps.completionFailed');
+      isCompleting.value = false;
+      return;
+    }
+  }
+
+  cleanupOnboardingStorage();
+
+  if (action === 'shutdown') {
+    submitInternalBootShutdown();
+    return;
+  }
+
+  if (action === 'reboot') {
+    submitInternalBootReboot();
     return;
   }
 
   props.onComplete();
+  isCompleting.value = false;
 };
 
-const handleConfirmReboot = () => {
-  showRebootWarningDialog.value = false;
-  cleanupOnboardingStorage({ clearTemporaryBypassSessionState: true });
-  submitInternalBootReboot();
+const handlePrimaryAction = async () => {
+  if (showRebootButton.value) {
+    pendingPowerAction.value = 'reboot';
+    return;
+  }
+
+  await finishOnboarding();
 };
 
-const handleCancelReboot = () => {
-  showRebootWarningDialog.value = false;
+const handleShutdownAction = () => {
+  pendingPowerAction.value = 'shutdown';
+};
+
+const handleConfirmPowerAction = async () => {
+  const action = pendingPowerAction.value;
+  pendingPowerAction.value = null;
+  if (action) {
+    await finishOnboarding({ action });
+  }
+};
+
+const handleCancelPowerAction = () => {
+  pendingPowerAction.value = null;
 };
 </script>
 
@@ -354,44 +421,33 @@ const handleCancelReboot = () => {
         </div>
       </div>
 
-      <Dialog
-        v-if="showRebootWarningDialog"
-        :model-value="showRebootWarningDialog"
-        :show-footer="false"
-        :show-close-button="false"
-        size="md"
-        class="max-w-md"
-      >
-        <div class="space-y-6 p-2">
-          <div class="space-y-2">
-            <h3 class="text-lg font-semibold">{{ t('onboarding.nextSteps.confirmReboot.title') }}</h3>
-            <p class="text-muted-foreground text-sm">
-              {{ t('onboarding.nextSteps.confirmReboot.description') }}
-            </p>
-            <blockquote class="border-s-4 border-yellow-500 bg-yellow-100 p-3">
-              <p class="text-sm leading-relaxed text-yellow-900">
-                {{ t('onboarding.nextSteps.confirmReboot.warning') }}
-              </p>
-            </blockquote>
-          </div>
-          <div class="flex justify-end gap-3">
-            <button
-              type="button"
-              class="border-muted hover:bg-muted rounded-md border px-4 py-2 text-sm font-medium"
-              @click="handleCancelReboot"
-            >
-              {{ t('common.cancel') }}
-            </button>
-            <button
-              type="button"
-              class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-2 text-sm font-medium"
-              @click="handleConfirmReboot"
-            >
-              {{ t('onboarding.nextSteps.confirmReboot.confirm') }}
-            </button>
-          </div>
-        </div>
-      </Dialog>
+      <InternalBootConfirmDialog
+        :open="pendingPowerAction !== null"
+        :action="pendingPowerAction ?? 'reboot'"
+        :disabled="isCompleting"
+        @confirm="handleConfirmPowerAction"
+        @cancel="handleCancelPowerAction"
+      />
+
+      <div v-if="internalBootFailed" class="mt-6 space-y-3">
+        <UAlert
+          color="warning"
+          variant="subtle"
+          icon="i-lucide-triangle-alert"
+          :description="t('onboarding.nextSteps.internalBootFailed')"
+        />
+        <UAlert
+          v-if="biosUpdateMissed"
+          color="warning"
+          variant="subtle"
+          icon="i-lucide-info"
+          :description="t('onboarding.nextSteps.internalBootBiosMissed')"
+        />
+      </div>
+
+      <p v-if="completionError" role="alert" aria-live="polite" class="mt-6 text-sm text-red-600">
+        {{ completionError }}
+      </p>
 
       <!-- Footer -->
       <div
@@ -407,12 +463,23 @@ const handleCancelReboot = () => {
         </button>
         <div v-else class="hidden w-1 sm:block" />
 
-        <BrandButton
-          :text="primaryButtonText"
-          class="!bg-primary hover:!bg-primary/90 w-full min-w-[200px] !text-white shadow-md transition-all hover:shadow-lg sm:w-auto"
-          @click="handlePrimaryAction"
-          :icon-right="CheckCircleIcon"
-        />
+        <div class="flex w-full items-center justify-end gap-4 sm:w-auto">
+          <button
+            v-if="showRebootButton"
+            :disabled="isCompleting"
+            class="text-muted hover:text-highlighted text-sm font-medium transition-colors disabled:opacity-50"
+            @click="handleShutdownAction"
+          >
+            {{ t('onboarding.nextSteps.shutdown') }}
+          </button>
+          <BrandButton
+            :text="primaryButtonText"
+            :disabled="isCompleting"
+            class="!bg-primary hover:!bg-primary/90 w-full min-w-[200px] !text-white shadow-md transition-all hover:shadow-lg sm:w-auto"
+            @click="handlePrimaryAction"
+            :icon-right="CheckCircleIcon"
+          />
+        </div>
       </div>
     </div>
   </div>

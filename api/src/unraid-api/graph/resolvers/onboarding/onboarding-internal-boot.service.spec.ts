@@ -4,8 +4,10 @@ import { execa } from 'execa';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { emcmd } from '@app/core/utils/clients/emcmd.js';
+import { getShares } from '@app/core/utils/shares/get-shares.js';
 import { getters } from '@app/store/index.js';
 import { loadStateFileSync } from '@app/store/services/state-file-loader.js';
+import { DisksService } from '@app/unraid-api/graph/resolvers/disks/disks.service.js';
 import { InternalBootStateService } from '@app/unraid-api/graph/resolvers/disks/internal-boot-state.service.js';
 import { OnboardingInternalBootService } from '@app/unraid-api/graph/resolvers/onboarding/onboarding-internal-boot.service.js';
 
@@ -27,26 +29,170 @@ vi.mock('@app/store/services/state-file-loader.js', () => ({
     loadStateFileSync: vi.fn(),
 }));
 
+vi.mock('@app/core/utils/shares/get-shares.js', () => ({
+    getShares: vi.fn(),
+}));
+
 describe('OnboardingInternalBootService', () => {
     const internalBootStateService = {
         getBootedFromFlashWithInternalBootSetup: vi.fn(),
         invalidateCachedInternalBootDeviceState: vi.fn(),
     };
+    const disksService = {
+        getAssignableDisks: vi.fn(),
+        getInternalBootDeviceNames: vi.fn(),
+    } satisfies Pick<DisksService, 'getAssignableDisks' | 'getInternalBootDeviceNames'>;
 
     beforeEach(() => {
         vi.clearAllMocks();
         internalBootStateService.getBootedFromFlashWithInternalBootSetup.mockResolvedValue(false);
         internalBootStateService.invalidateCachedInternalBootDeviceState.mockResolvedValue(undefined);
+        disksService.getAssignableDisks.mockResolvedValue([]);
+        disksService.getInternalBootDeviceNames.mockResolvedValue(new Set());
         vi.mocked(getters.emhttp).mockReturnValue({
+            var: {},
             devices: [],
             disks: [],
         } as unknown as ReturnType<typeof getters.emhttp>);
+        vi.mocked(getShares).mockImplementation(((type?: string) => {
+            if (type === 'users' || type === 'disks') {
+                return [];
+            }
+
+            return {
+                users: [],
+                disks: [],
+            };
+        }) as unknown as typeof getShares);
     });
 
     const createService = () =>
         new OnboardingInternalBootService(
-            internalBootStateService as unknown as InternalBootStateService
+            internalBootStateService as unknown as InternalBootStateService,
+            disksService as unknown as DisksService
         );
+
+    it('builds internal boot context from the latest emhttp state', async () => {
+        const assignableDisks = [
+            {
+                id: 'disk-1',
+                device: '/dev/sda',
+                serialNum: 'SERIAL-1',
+                size: 1,
+                interfaceType: 'SATA',
+            },
+        ];
+        disksService.getAssignableDisks.mockResolvedValue(assignableDisks);
+        vi.mocked(getters.emhttp).mockReturnValue({
+            var: {
+                mdState: 'STOPPED',
+                bootEligible: true,
+                enableBootTransfer: 'yes',
+                reservedNames: 'flash,cache',
+            },
+            devices: [{ id: 'disk-1', device: 'sda' }],
+            disks: [
+                { type: 'CACHE', name: 'cache' },
+                { type: 'CACHE', name: 'nvme' },
+                { type: 'DATA', name: 'disk1' },
+            ],
+        } as unknown as ReturnType<typeof getters.emhttp>);
+        vi.mocked(getShares).mockImplementation(((scope?: string) => {
+            if (scope === 'users') {
+                return [{ name: 'media' }];
+            }
+            if (scope === 'disks') {
+                return [{ name: 'diskshare' }];
+            }
+
+            return {
+                users: [{ name: 'media' }],
+                disks: [{ name: 'diskshare' }],
+            };
+        }) as unknown as typeof getShares);
+
+        const service = createService();
+        const result = await service.getInternalBootContext();
+
+        expect(result).toEqual({
+            arrayStopped: true,
+            bootEligible: true,
+            bootedFromFlashWithInternalBootSetup: false,
+            enableBootTransfer: 'yes',
+            reservedNames: ['flash', 'cache'],
+            shareNames: ['media', 'diskshare'],
+            poolNames: ['cache', 'nvme'],
+            assignableDisks,
+            driveWarnings: [],
+        });
+        expect(vi.mocked(loadStateFileSync)).not.toHaveBeenCalled();
+    });
+
+    it('flags assignable disks that already contain the internal boot partition layout', async () => {
+        const assignableDisks = [
+            {
+                id: 'disk-1',
+                device: '/dev/sda',
+                serialNum: 'SERIAL-1',
+                size: 1,
+                interfaceType: 'SATA',
+            },
+            {
+                id: 'disk-2',
+                device: '/dev/sdb',
+                serialNum: 'SERIAL-2',
+                size: 1,
+                interfaceType: 'SATA',
+            },
+        ];
+        disksService.getAssignableDisks.mockResolvedValue(assignableDisks);
+        disksService.getInternalBootDeviceNames.mockResolvedValue(new Set(['sdb']));
+
+        const service = createService();
+        const result = await service.getInternalBootContext();
+
+        expect(result.driveWarnings).toEqual([
+            {
+                diskId: 'disk-2',
+                device: 'sdb',
+                warnings: ['HAS_INTERNAL_BOOT_PARTITIONS'],
+            },
+        ]);
+    });
+
+    it('refreshes internal boot context from disk and invalidates cached device state', async () => {
+        const assignableDisks = [
+            {
+                id: 'disk-1',
+                device: '/dev/sda',
+                serialNum: 'SERIAL-1',
+                size: 1,
+                interfaceType: 'SATA',
+            },
+        ];
+        disksService.getAssignableDisks.mockResolvedValue(assignableDisks);
+        vi.mocked(getters.emhttp).mockReturnValue({
+            var: {
+                mdState: 'STOPPED',
+                bootEligible: true,
+                enableBootTransfer: 'yes',
+                reservedNames: '',
+            },
+            devices: [{ id: 'disk-1', device: 'sda' }],
+            disks: [{ type: 'CACHE', name: 'cache' }],
+        } as unknown as ReturnType<typeof getters.emhttp>);
+
+        const service = createService();
+        const result = await service.refreshInternalBootContext();
+
+        expect(internalBootStateService.invalidateCachedInternalBootDeviceState).toHaveBeenCalledTimes(
+            1
+        );
+        expect(vi.mocked(loadStateFileSync)).toHaveBeenNthCalledWith(1, 'var');
+        expect(vi.mocked(loadStateFileSync)).toHaveBeenNthCalledWith(2, 'devs');
+        expect(vi.mocked(loadStateFileSync)).toHaveBeenNthCalledWith(3, 'disks');
+        expect(result.assignableDisks).toEqual(assignableDisks);
+    });
 
     it('runs the internal boot emcmd sequence and returns success', async () => {
         vi.mocked(emcmd).mockResolvedValue({ ok: true } as Awaited<ReturnType<typeof emcmd>>);
@@ -99,7 +245,15 @@ describe('OnboardingInternalBootService', () => {
 
     it('runs efibootmgr update flow when updateBios is requested', async () => {
         vi.mocked(emcmd).mockResolvedValue({ ok: true } as Awaited<ReturnType<typeof emcmd>>);
+        disksService.getAssignableDisks.mockResolvedValue([
+            {
+                id: 'disk-1',
+                serialNum: 'disk-1',
+                device: '/dev/sdb',
+            },
+        ]);
         vi.mocked(getters.emhttp).mockReturnValue({
+            var: { mdState: 'STOPPED' },
             devices: [{ id: 'disk-1', device: 'sdb' }],
             disks: [{ type: 'FLASH', device: 'sda' }],
         } as unknown as ReturnType<typeof getters.emhttp>);
@@ -150,7 +304,10 @@ describe('OnboardingInternalBootService', () => {
             1
         );
         expect(vi.mocked(emcmd)).toHaveBeenCalledTimes(4);
-        expect(vi.mocked(loadStateFileSync)).not.toHaveBeenCalled();
+        expect(disksService.getAssignableDisks).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(loadStateFileSync)).toHaveBeenNthCalledWith(1, 'var');
+        expect(vi.mocked(loadStateFileSync)).toHaveBeenNthCalledWith(2, 'devs');
+        expect(vi.mocked(loadStateFileSync)).toHaveBeenNthCalledWith(3, 'disks');
         expect(vi.mocked(execa)).toHaveBeenNthCalledWith(1, 'efibootmgr', [], { reject: false });
         expect(vi.mocked(execa)).toHaveBeenNthCalledWith(2, 'efibootmgr', ['-b', '0001', '-B'], {
             reject: false,
@@ -174,7 +331,7 @@ describe('OnboardingInternalBootService', () => {
         expect(vi.mocked(execa)).toHaveBeenNthCalledWith(
             4,
             'efibootmgr',
-            ['-c', '-d', '/dev/sda', '-p', '1', '-L', 'Unraid Flash'],
+            ['-c', '-d', '/dev/sda', '-p', '1', '-L', 'Unraid Flash', '-l', '\\EFI\\BOOT\\BOOTX64.EFI'],
             { reject: false }
         );
         expect(vi.mocked(execa)).toHaveBeenNthCalledWith(5, 'efibootmgr', [], { reject: false });
@@ -215,9 +372,17 @@ describe('OnboardingInternalBootService', () => {
 
         expect(result.ok).toBe(true);
         expect(result.code).toBe(0);
-        expect(result.output).toContain('efibootmgr failed for');
+        expect(result.output).toContain(
+            "Unable to resolve boot device for serial 'disk-1' from assignableDisks; skipping BIOS entry creation for this disk."
+        );
+        expect(result.output).not.toContain("efibootmgr failed for '/dev/disk-1'");
         expect(result.output).toContain(
             'BIOS boot entry updates completed with warnings; manual BIOS boot order changes may still be required.'
+        );
+        expect(vi.mocked(execa)).not.toHaveBeenCalledWith(
+            'efibootmgr',
+            expect.arrayContaining(['/dev/disk-1']),
+            { reject: false }
         );
         expect(internalBootStateService.invalidateCachedInternalBootDeviceState).toHaveBeenCalledTimes(
             1
@@ -269,8 +434,9 @@ describe('OnboardingInternalBootService', () => {
         expect(vi.mocked(emcmd)).not.toHaveBeenCalled();
     });
 
-    it('returns validation error when internal boot is already configured while booted from flash', async () => {
+    it('continues setup when booted from flash and internal boot partitions already exist', async () => {
         internalBootStateService.getBootedFromFlashWithInternalBootSetup.mockResolvedValue(true);
+        vi.mocked(emcmd).mockResolvedValue({ ok: true } as Awaited<ReturnType<typeof emcmd>>);
         const service = createService();
 
         const result = await service.createInternalBootPool({
@@ -280,34 +446,12 @@ describe('OnboardingInternalBootService', () => {
             updateBios: false,
         });
 
-        expect(result).toMatchObject({
-            ok: false,
-            code: 3,
-        });
-        expect(result.output).toContain('internal boot is already configured');
-        expect(internalBootStateService.invalidateCachedInternalBootDeviceState).not.toHaveBeenCalled();
-        expect(vi.mocked(emcmd)).not.toHaveBeenCalled();
-    });
-
-    it('returns failure output when the internal boot state lookup throws', async () => {
-        internalBootStateService.getBootedFromFlashWithInternalBootSetup.mockRejectedValue(
-            new Error('state lookup failed')
+        expect(result.ok).toBe(true);
+        expect(result.code).toBe(0);
+        expect(vi.mocked(emcmd)).toHaveBeenCalledTimes(4);
+        expect(internalBootStateService.invalidateCachedInternalBootDeviceState).toHaveBeenCalledTimes(
+            1
         );
-        const service = createService();
-
-        const result = await service.createInternalBootPool({
-            poolName: 'cache',
-            devices: ['disk-1'],
-            bootSizeMiB: 16384,
-            updateBios: false,
-        });
-
-        expect(result.ok).toBe(false);
-        expect(result.code).toBe(1);
-        expect(result.output).toContain('mkbootpool: command failed or timed out');
-        expect(result.output).toContain('state lookup failed');
-        expect(internalBootStateService.invalidateCachedInternalBootDeviceState).not.toHaveBeenCalled();
-        expect(vi.mocked(emcmd)).not.toHaveBeenCalled();
     });
 
     it('returns failure output when emcmd command throws', async () => {

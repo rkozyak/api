@@ -11,6 +11,7 @@ import { OnboardingMutations } from '@app/unraid-api/graph/resolvers/mutation/mu
 import { OnboardingInternalBootService } from '@app/unraid-api/graph/resolvers/onboarding/onboarding-internal-boot.service.js';
 import {
     CreateInternalBootPoolInput,
+    OnboardingInternalBootContext,
     OnboardingInternalBootResult,
     OnboardingOverrideInput,
 } from '@app/unraid-api/graph/resolvers/onboarding/onboarding.model.js';
@@ -44,6 +45,54 @@ export class OnboardingMutationsResolver {
     })
     async resetOnboarding(): Promise<Onboarding> {
         await this.onboardingService.resetOnboarding();
+        return this.onboardingService.getOnboardingResponse();
+    }
+
+    @ResolveField(() => Onboarding, {
+        description: 'Force the onboarding modal open',
+    })
+    @UsePermissions({
+        action: AuthAction.UPDATE_ANY,
+        resource: Resource.WELCOME,
+    })
+    async openOnboarding(): Promise<Onboarding> {
+        await this.onboardingService.openOnboarding();
+        return this.onboardingService.getOnboardingResponse();
+    }
+
+    @ResolveField(() => Onboarding, {
+        description: 'Close the onboarding modal',
+    })
+    @UsePermissions({
+        action: AuthAction.UPDATE_ANY,
+        resource: Resource.WELCOME,
+    })
+    async closeOnboarding(): Promise<Onboarding> {
+        await this.onboardingService.closeOnboarding();
+        return this.onboardingService.getOnboardingResponse();
+    }
+
+    @ResolveField(() => Onboarding, {
+        description: 'Temporarily bypass onboarding in API memory',
+    })
+    @UsePermissions({
+        action: AuthAction.UPDATE_ANY,
+        resource: Resource.WELCOME,
+    })
+    async bypassOnboarding(): Promise<Onboarding> {
+        await this.onboardingService.bypassOnboarding();
+        return this.onboardingService.getOnboardingResponse();
+    }
+
+    @ResolveField(() => Onboarding, {
+        description: 'Clear the temporary onboarding bypass',
+    })
+    @UsePermissions({
+        action: AuthAction.UPDATE_ANY,
+        resource: Resource.WELCOME,
+    })
+    async resumeOnboarding(): Promise<Onboarding> {
+        await this.onboardingService.resumeOnboarding();
         return this.onboardingService.getOnboardingResponse();
     }
 
@@ -90,5 +139,16 @@ export class OnboardingMutationsResolver {
         @Args('input') input: CreateInternalBootPoolInput
     ): Promise<OnboardingInternalBootResult> {
         return this.onboardingInternalBootService.createInternalBootPool(input);
+    }
+
+    @ResolveField(() => OnboardingInternalBootContext, {
+        description: 'Refresh onboarding internal boot context from the latest emhttp state',
+    })
+    @UsePermissions({
+        action: AuthAction.UPDATE_ANY,
+        resource: Resource.WELCOME,
+    })
+    async refreshInternalBootContext(): Promise<OnboardingInternalBootContext> {
+        return this.onboardingInternalBootService.refreshInternalBootContext();
     }
 }

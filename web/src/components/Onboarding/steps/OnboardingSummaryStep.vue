@@ -17,21 +17,22 @@ import {
 import {
   ArrowPathIcon,
   CheckCircleIcon,
-  ChevronDownIcon,
   ChevronRightIcon,
   ClockIcon,
   ExclamationCircleIcon,
   ExclamationTriangleIcon,
 } from '@heroicons/vue/24/solid';
-import { BrandButton, Dialog } from '@unraid/ui';
+import { Accordion, BrandButton } from '@unraid/ui';
 import OnboardingConsole from '@/components/Onboarding/components/OnboardingConsole.vue';
-import { submitInternalBootCreation } from '@/components/Onboarding/composables/internalBoot';
+import {
+  applyInternalBootSelection,
+  getErrorMessage,
+} from '@/components/Onboarding/composables/internalBoot';
 import { buildOnboardingErrorDiagnostics } from '@/components/Onboarding/composables/onboardingErrorDiagnostics';
 import usePluginInstaller, {
   INSTALL_OPERATION_TIMEOUT_CODE,
 } from '@/components/Onboarding/composables/usePluginInstaller';
 import { GET_AVAILABLE_LANGUAGES_QUERY } from '@/components/Onboarding/graphql/availableLanguages.query';
-import { COMPLETE_ONBOARDING_MUTATION } from '@/components/Onboarding/graphql/completeUpgradeStep.mutation';
 import {
   SET_LOCALE_MUTATION,
   SET_THEME_MUTATION,
@@ -41,9 +42,7 @@ import {
 import { GET_CORE_SETTINGS_QUERY } from '@/components/Onboarding/graphql/getCoreSettings.query';
 import { INSTALLED_UNRAID_PLUGINS_QUERY } from '@/components/Onboarding/graphql/installedPlugins.query';
 import { UPDATE_SYSTEM_TIME_MUTATION } from '@/components/Onboarding/graphql/updateSystemTime.mutation';
-import { useOnboardingModalStore } from '@/components/Onboarding/store/onboardingModalVisibility';
-import { useOnboardingStore } from '@/components/Onboarding/store/onboardingStatus';
-import { Disclosure, DisclosureButton, DisclosurePanel } from '@headlessui/vue';
+import { convert } from 'convert';
 
 import type { LogEntry } from '@/components/Onboarding/components/OnboardingConsole.vue';
 import type { OnboardingErrorDiagnostics } from '@/components/Onboarding/composables/onboardingErrorDiagnostics';
@@ -67,16 +66,12 @@ const props = defineProps<Props>();
 const { t } = useI18n();
 const draftStore = useOnboardingDraftStore();
 const { activationCode, isFreshInstall, registrationState } = storeToRefs(useActivationCodeDataStore());
-const { refetchOnboarding } = useOnboardingStore();
-const onboardingModalStore = useOnboardingModalStore();
-
 // Setup Mutations
 const { mutate: updateSystemTime } = useMutation(UPDATE_SYSTEM_TIME_MUTATION);
 const { mutate: updateServerIdentity } = useMutation(UPDATE_SERVER_IDENTITY_MUTATION);
 const { mutate: setTheme } = useMutation(SET_THEME_MUTATION);
 const { mutate: setLocale } = useMutation(SET_LOCALE_MUTATION);
 const { mutate: updateSshSettings } = useMutation(UPDATE_SSH_SETTINGS_MUTATION);
-const { mutate: completeOnboarding } = useMutation(COMPLETE_ONBOARDING_MUTATION);
 
 const { installLanguage, installPlugin } = usePluginInstaller();
 
@@ -163,16 +158,9 @@ const formatBytes = (bytes: number) => {
     return t('onboarding.internalBootStep.unknownSize');
   }
 
-  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-
-  const precision = value >= 100 || unitIndex === 0 ? 0 : 1;
-  return `${value.toFixed(precision)} ${units[unitIndex]}`;
+  const converted = convert(bytes, 'B').to('best', 'metric');
+  const precision = converted.quantity >= 100 || converted.unit === 'B' ? 0 : 1;
+  return `${converted.quantity.toFixed(precision)} ${converted.unit}`;
 };
 
 const normalizeDeviceName = (value: string | null | undefined): string => {
@@ -188,7 +176,7 @@ const normalizeDeviceName = (value: string | null | undefined): string => {
 
 const internalBootDeviceLabelById = computed(() => {
   const data: GetInternalBootContextQuery | null | undefined = internalBootContextResult.value;
-  const disks = data?.disks ?? [];
+  const disks = data?.internalBootContext.assignableDisks ?? [];
   const labels = new Map<string, string>();
 
   for (const disk of disks) {
@@ -198,9 +186,9 @@ const internalBootDeviceLabelById = computed(() => {
     }
 
     const serialNum = disk.serialNum?.trim() || '';
-    const emhttpDeviceId = disk.emhttpDeviceId?.trim() || '';
-    const optionValue = emhttpDeviceId || device;
-    const displayId = serialNum || emhttpDeviceId || device;
+    const diskId = disk.id?.trim() || '';
+    const optionValue = serialNum || diskId || device;
+    const displayId = serialNum || device;
     const sizeBytes = disk.size;
     const sizeLabel = formatBytes(sizeBytes);
     const label =
@@ -220,6 +208,7 @@ const internalBootSummary = computed(() => {
   }
 
   return {
+    poolMode: selection.poolMode ?? 'hybrid',
     poolName: selection.poolName,
     slotCount: selection.slotCount,
     devices: selection.devices,
@@ -249,24 +238,6 @@ const addLog = (
   logs.value.push({ message, type, timestamp: Date.now(), details });
 };
 
-const getErrorMessage = (caughtError: unknown) => {
-  if (caughtError instanceof Error) {
-    const trimmedMessage = caughtError.message.trim();
-    if (trimmedMessage) {
-      return trimmedMessage;
-    }
-  }
-
-  if (typeof caughtError === 'string') {
-    const trimmedMessage = caughtError.trim();
-    if (trimmedMessage) {
-      return trimmedMessage;
-    }
-  }
-
-  return summaryT('errors.unknownError');
-};
-
 interface OnboardingErrorLogContext {
   operation: string;
   variables?: unknown;
@@ -278,23 +249,6 @@ const addErrorLog = (message: string, caughtError: unknown, context: OnboardingE
     'error',
     buildOnboardingErrorDiagnostics(caughtError, context)
   );
-};
-
-interface InternalBootBiosLogSummary {
-  summaryLine: string | null;
-  failureLines: string[];
-}
-
-const summarizeInternalBootBiosLogs = (output: string): InternalBootBiosLogSummary => {
-  const lines = output
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  const summaryLine = lines.find((line) => line.startsWith('BIOS boot entry updates completed')) ?? null;
-  const failureLines = Array.from(
-    new Set(lines.filter((line) => line.toLowerCase().includes('efibootmgr failed')))
-  );
-  return { summaryLine, failureLines };
 };
 
 const showDiagnosticLogsInResultDialog = computed(
@@ -532,29 +486,6 @@ const selectedPluginSummaries = computed(() => {
   });
 });
 
-const hasCoreSettingChanges = computed(() => {
-  const currentTimezone = coreSettingsResult.value?.systemTime?.timeZone || '';
-  const currentName =
-    coreSettingsResult.value?.server?.name || coreSettingsResult.value?.vars?.name || '';
-  const currentDescription = coreSettingsResult.value?.server?.comment || '';
-  const currentTheme = coreSettingsResult.value?.display?.theme || 'white';
-  const currentLocale = coreSettingsResult.value?.display?.locale || 'en_US';
-  const currentSsh = Boolean(coreSettingsResult.value?.vars?.useSsh || false);
-
-  return (
-    draftStore.selectedTimeZone !== currentTimezone ||
-    draftStore.serverName !== currentName ||
-    draftStore.serverDescription !== currentDescription ||
-    draftStore.selectedTheme !== currentTheme ||
-    draftStore.selectedLanguage !== currentLocale ||
-    draftStore.useSsh !== currentSsh
-  );
-});
-
-const hasAnyChangesToApply = computed(
-  () =>
-    hasCoreSettingChanges.value || pluginIdsToInstall.value.length > 0 || hasInternalBootSelection.value
-);
 const isApplyDataReady = computed(() =>
   Boolean(coreSettingsResult.value?.server && coreSettingsResult.value?.vars)
 );
@@ -645,9 +576,6 @@ const handleComplete = async () => {
     return;
   }
 
-  // Lock modal open
-  onboardingModalStore.setIsHidden(false);
-
   isProcessing.value = true;
   error.value = null;
   logs.value = []; // Clear logs
@@ -665,7 +593,6 @@ const handleComplete = async () => {
     let hadNonOptimisticFailures = false;
     let hadWarnings = !baselineLoaded;
     let hadSshVerificationUncertainty = false;
-    let completionMarked = false;
     let hadInstallTimeout = false;
 
     // 1. Apply Core Settings
@@ -745,7 +672,17 @@ const handleComplete = async () => {
       }
     };
 
-    if (!hasAnyChangesToApply.value) {
+    const pluginsToInstall = pluginIdsToInstall.value;
+    const hasUpdatesToApply =
+      shouldApplyTimeZone ||
+      shouldApplyServerIdentity ||
+      shouldApplyTheme ||
+      shouldApplyLocale ||
+      shouldApplySsh ||
+      pluginsToInstall.length > 0 ||
+      Boolean(internalBootSelection.value);
+
+    if (!hasUpdatesToApply) {
       addLog(summaryT('logs.noChanges'), 'info');
     }
 
@@ -909,7 +846,6 @@ const handleComplete = async () => {
       });
     }
 
-    const pluginsToInstall = pluginIdsToInstall.value;
     if (pluginsToInstall.length > 0) {
       addLog(summaryT('logs.installingPlugins', { count: pluginsToInstall.length }), 'info');
 
@@ -987,82 +923,30 @@ const handleComplete = async () => {
     // 3. Internal boot setup
     if (internalBootSelection.value) {
       const selection = internalBootSelection.value;
+      draftStore.setInternalBootApplyAttempted(true);
       addLog(summaryT('logs.internalBootStart'), 'info');
       addLog(summaryT('logs.internalBootConfiguring'), 'info');
       const internalBootProgressTimer = setInterval(() => {
         addLog(summaryT('logs.internalBootStillRunning'), 'info');
       }, 10000);
       try {
-        const result = await submitInternalBootCreation(
-          {
-            poolName: selection.poolName,
-            devices: selection.devices,
-            bootSizeMiB: selection.bootSizeMiB,
-            updateBios: selection.updateBios,
-          },
-          { reboot: false }
-        );
-
-        if (result.ok) {
-          draftStore.setInternalBootApplySucceeded(true);
-          addLog(summaryT('logs.internalBootConfigured'), 'success');
-          if (selection.updateBios) {
-            const biosLogSummary = summarizeInternalBootBiosLogs(result.output);
-            const hadBiosWarnings =
-              biosLogSummary.failureLines.length > 0 ||
-              Boolean(biosLogSummary.summaryLine?.toLowerCase().includes('with warnings'));
-            if (hadBiosWarnings) {
-              hadWarnings = true;
-              hadNonOptimisticFailures = true;
-            }
-            if (biosLogSummary.summaryLine) {
-              addLog(biosLogSummary.summaryLine, hadBiosWarnings ? 'error' : 'success');
-            }
-            for (const failureLine of biosLogSummary.failureLines) {
-              addLog(failureLine, 'error');
-            }
-          }
-        } else {
-          hadNonOptimisticFailures = true;
-          hadWarnings = true;
-          addLog(
-            summaryT('logs.internalBootReturnedError', { output: result.output }),
-            'error',
-            buildOnboardingErrorDiagnostics(
-              {
-                message: 'Internal boot setup returned ok=false',
-                code: result.code ?? null,
-                networkError: {
-                  status: result.code ?? null,
-                  result,
-                },
-              },
-              {
-                operation: 'CreateInternalBootPool',
-                variables: {
-                  poolName: selection.poolName,
-                  devices: selection.devices,
-                  bootSizeMiB: selection.bootSizeMiB,
-                  updateBios: selection.updateBios,
-                  reboot: false,
-                },
-              }
-            )
-          );
-        }
-      } catch (caughtError: unknown) {
-        hadNonOptimisticFailures = true;
-        hadWarnings = true;
-        addErrorLog(summaryT('logs.internalBootFailed'), caughtError, {
-          operation: 'CreateInternalBootPool',
-          variables: {
-            poolName: selection.poolName,
-            devices: selection.devices,
-            bootSizeMiB: selection.bootSizeMiB,
-            updateBios: selection.updateBios,
-            reboot: false,
-          },
+        const applyResult = await applyInternalBootSelection(selection, {
+          configured: summaryT('logs.internalBootConfigured'),
+          returnedError: (output) => summaryT('logs.internalBootReturnedError', { output }),
+          failed: summaryT('logs.internalBootFailed'),
+          biosUnverified: summaryT('logs.internalBootBiosUnverified'),
         });
+
+        if (applyResult.applySucceeded) {
+          draftStore.setInternalBootApplySucceeded(true);
+        }
+
+        hadWarnings ||= applyResult.hadWarnings;
+        hadNonOptimisticFailures ||= applyResult.hadNonOptimisticFailures;
+
+        for (const log of applyResult.logs) {
+          addLog(log.message, log.type, log.details);
+        }
       } finally {
         clearInterval(internalBootProgressTimer);
       }
@@ -1098,52 +982,10 @@ const handleComplete = async () => {
       }
     }
 
-    // 5. Mark Complete
-    try {
-      await runWithTransientNetworkRetry(() => completeOnboarding(), shouldRetryNetworkMutations);
-      completionMarked = true;
-    } catch (caughtError: unknown) {
-      hadWarnings = true;
-      addErrorLog(summaryT('logs.completeOnboardingFailed'), caughtError, {
-        operation: 'CompleteOnboarding',
-      });
-    }
-
-    if (completionMarked) {
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-
-    // Avoid blocking completion UI when API is offline/retrying.
-    if (completionMarked && baselineLoaded) {
-      try {
-        await Promise.race([
-          refetchOnboarding(),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Onboarding refresh timed out')), 1500)
-          ),
-        ]);
-      } catch (caughtError: unknown) {
-        hadWarnings = true;
-        addErrorLog(summaryT('logs.refreshOnboardingFailedContinue'), caughtError, {
-          operation: 'OnboardingQuery',
-        });
-      }
-    } else {
-      hadWarnings = true;
-      addLog(summaryT('logs.skipRefreshApiUnavailable'), 'info');
-    }
-
-    addLog(summaryT('logs.finalizingSetup'), 'info');
     await applyServerIdentityAtEnd();
-    if (completionMarked) {
-      addLog(summaryT('logs.setupComplete'), 'success');
-    }
+    addLog(summaryT('logs.finalizingSetup'), 'info');
 
-    if (!completionMarked) {
-      applyResultSeverity.value = 'warning';
-      applyResultTitle.value = summaryT('result.bestEffortTitle');
-      applyResultMessage.value = summaryT('result.bestEffortApiOffline');
-    } else if (hadInstallTimeout) {
+    if (hadInstallTimeout) {
       applyResultSeverity.value = 'warning';
       applyResultTitle.value = summaryT('result.timeoutTitle');
       applyResultMessage.value = summaryT('result.timeoutMessage');
@@ -1159,7 +1001,12 @@ const handleComplete = async () => {
       applyResultSeverity.value = 'warning';
       applyResultTitle.value = summaryT('result.bestEffortTitle');
       applyResultMessage.value = summaryT('result.bestEffortMessage');
+    } else if (!hasUpdatesToApply) {
+      applyResultSeverity.value = 'success';
+      applyResultTitle.value = summaryT('result.noChangesTitle');
+      applyResultMessage.value = summaryT('result.noChangesMessage');
     } else {
+      addLog(summaryT('logs.settingsApplied'), 'success');
       applyResultSeverity.value = 'success';
       applyResultTitle.value = summaryT('result.successTitle');
       applyResultMessage.value = summaryT('result.successMessage');
@@ -1232,15 +1079,14 @@ const handleBack = () => {
         </div>
       </div>
 
-      <!-- Initialization Message (Tip Style) -->
-      <blockquote class="border-success-500 bg-success-100 text my-8 border-s-4 p-4">
-        <div class="flex items-start gap-2">
-          <CheckCircleIcon class="text-success mt-0.5 h-6 w-6 flex-shrink-0" />
-          <p class="text-sm leading-relaxed">
-            <span class="mr-1 mb-1 block">{{ t('onboarding.summaryStep.initializationMessage') }}</span>
-          </p>
-        </div>
-      </blockquote>
+      <!-- Initialization Message -->
+      <UAlert
+        color="success"
+        variant="subtle"
+        :title="t('onboarding.summaryStep.initializationMessage')"
+        icon="i-heroicons-check-circle"
+        class="my-8"
+      />
 
       <!-- Summary Grid -->
       <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
@@ -1326,50 +1172,51 @@ const handleBack = () => {
 
       <!-- Plugins Summary -->
       <div class="border-muted bg-bg/50 mt-6 rounded-lg border">
-        <Disclosure v-slot="{ open }">
-          <DisclosureButton
-            :disabled="draftPluginsCount === 0"
-            :class="[
-              'flex w-full items-center justify-between p-5 text-left focus:outline-none',
-              draftPluginsCount === 0 ? 'cursor-default' : 'cursor-pointer',
-            ]"
-          >
-            <div class="flex items-center gap-3">
-              <div class="bg-primary/10 rounded-lg p-2">
-                <PuzzlePieceIcon class="text-primary h-6 w-6" />
-              </div>
-              <div>
-                <h3 class="text-highlighted mb-0.5 text-sm font-bold uppercase">
-                  {{ t('onboarding.pluginsStep.title') }}
-                </h3>
-                <p class="text-muted text-xs">
-                  {{ t('onboarding.summaryStep.pluginsSelected', { count: draftPluginsCount }) }}
-                </p>
-              </div>
-            </div>
+        <Accordion
+          :items="[
+            {
+              value: 'plugins',
+              title: t('onboarding.pluginsStep.title'),
+              disabled: draftPluginsCount === 0,
+            },
+          ]"
+          type="single"
+          collapsible
+          class="border-none"
+          item-class="border-none"
+          trigger-class="pr-4 hover:no-underline [&>svg]:text-primary"
+        >
+          <template #trigger="{ open }">
             <div
-              v-if="draftPluginsCount > 0"
-              class="text-primary hover:text-primary/80 flex items-center gap-2 text-sm font-medium transition-colors"
+              :class="[
+                'flex w-full items-center justify-between px-3 text-left focus:outline-none',
+                draftPluginsCount === 0 ? 'cursor-default' : 'cursor-pointer',
+              ]"
             >
-              <span v-if="!open">{{ t('onboarding.summaryStep.viewSelected') }}</span>
-              <span v-else>{{ t('onboarding.summaryStep.hideSelected') }}</span>
-              <ChevronDownIcon
-                :class="[
-                  open ? 'rotate-180 transform' : '',
-                  'h-5 w-5 transition-transform duration-200',
-                ]"
-              />
+              <div class="flex items-center gap-3">
+                <div class="bg-primary/10 rounded-lg p-2">
+                  <PuzzlePieceIcon class="text-primary h-6 w-6" />
+                </div>
+                <div>
+                  <h3 class="text-highlighted mb-0.5 text-sm font-bold uppercase">
+                    {{ t('onboarding.pluginsStep.title') }}
+                  </h3>
+                  <p class="text-muted text-xs">
+                    {{ t('onboarding.summaryStep.pluginsSelected', { count: draftPluginsCount }) }}
+                  </p>
+                </div>
+              </div>
+              <div
+                v-if="draftPluginsCount > 0"
+                class="text-primary hover:text-primary/80 flex items-center gap-2 text-sm font-medium transition-colors"
+              >
+                <span v-if="!open">{{ t('onboarding.summaryStep.viewSelected') }}</span>
+                <span v-else>{{ t('onboarding.summaryStep.hideSelected') }}</span>
+              </div>
             </div>
-          </DisclosureButton>
-          <transition
-            enter-active-class="transition duration-100 ease-out"
-            enter-from-class="transform scale-95 opacity-0"
-            enter-to-class="transform scale-100 opacity-100"
-            leave-active-class="transition duration-75 ease-out"
-            leave-from-class="transform scale-100 opacity-100"
-            leave-to-class="transform scale-95 opacity-0"
-          >
-            <DisclosurePanel class="px-5 pt-0 pb-5">
+          </template>
+          <template #content>
+            <div class="px-5 pt-0 pb-5">
               <div class="border-muted space-y-2 border-t pt-4">
                 <div v-if="draftPluginsCount === 0" class="text-muted text-sm italic">
                   {{ t('onboarding.summaryStep.noPluginsSelected') }}
@@ -1404,9 +1251,9 @@ const handleBack = () => {
                   </span>
                 </div>
               </div>
-            </DisclosurePanel>
-          </transition>
-        </Disclosure>
+            </div>
+          </template>
+        </Accordion>
       </div>
 
       <div v-if="showBootConfiguration" class="border-muted bg-bg/50 mt-6 rounded-lg border p-5">
@@ -1424,6 +1271,17 @@ const handleBack = () => {
 
           <template v-if="internalBootSummary">
             <div class="flex flex-col gap-1 text-sm sm:flex-row sm:items-start sm:justify-between">
+              <span class="text-muted">{{ t('onboarding.summaryStep.bootConfig.poolMode') }}</span>
+              <span class="text-highlighted font-medium break-all sm:text-right">{{
+                internalBootSummary.poolMode === 'dedicated'
+                  ? t('onboarding.summaryStep.bootConfig.poolModeDedicated')
+                  : t('onboarding.summaryStep.bootConfig.poolModeHybrid')
+              }}</span>
+            </div>
+            <div
+              v-if="internalBootSummary.poolMode !== 'dedicated'"
+              class="flex flex-col gap-1 text-sm sm:flex-row sm:items-start sm:justify-between"
+            >
               <span class="text-muted">{{ t('onboarding.summaryStep.bootConfig.pool') }}</span>
               <span class="text-highlighted font-medium break-all sm:text-right">{{
                 internalBootSummary.poolName
@@ -1435,7 +1293,10 @@ const handleBack = () => {
                 internalBootSummary.slotCount
               }}</span>
             </div>
-            <div class="flex flex-col gap-1 text-sm sm:flex-row sm:items-start sm:justify-between">
+            <div
+              v-if="internalBootSummary.poolMode !== 'dedicated'"
+              class="flex flex-col gap-1 text-sm sm:flex-row sm:items-start sm:justify-between"
+            >
               <span class="text-muted">{{ t('onboarding.summaryStep.bootConfig.bootReserved') }}</span>
               <span class="text-highlighted font-medium break-all sm:text-right">{{
                 internalBootSummary.bootReservedSize
@@ -1487,17 +1348,15 @@ const handleBack = () => {
         </p>
       </div>
 
-      <Dialog
-        v-if="showBootDriveWarningDialog"
-        :model-value="showBootDriveWarningDialog"
-        :show-footer="false"
-        :show-close-button="false"
-        size="md"
-        class="max-w-lg"
+      <UModal
+        :open="showBootDriveWarningDialog"
+        :portal="false"
+        :title="t('onboarding.summaryStep.driveWipe.title')"
+        :ui="{ footer: 'justify-end', overlay: 'z-50', content: 'z-50 max-w-lg' }"
+        @update:open="showBootDriveWarningDialog = $event"
       >
-        <div class="space-y-6 p-2">
+        <template #body>
           <div class="space-y-3">
-            <h3 class="text-lg font-semibold">{{ t('onboarding.summaryStep.driveWipe.title') }}</h3>
             <p class="text-muted-foreground text-sm">
               {{ t('onboarding.summaryStep.driveWipe.selectedDrives') }}
             </p>
@@ -1514,59 +1373,46 @@ const handleBack = () => {
               {{ t('onboarding.summaryStep.driveWipe.confirmPrompt') }}
             </p>
           </div>
-          <div class="flex justify-end gap-3">
-            <button
-              type="button"
-              class="border-muted hover:bg-muted rounded-md border px-4 py-2 text-sm font-medium"
-              @click="handleBootDriveWarningCancel"
-            >
-              {{ t('common.cancel') }}
-            </button>
-            <button
-              type="button"
-              class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-2 text-sm font-medium"
-              @click="handleBootDriveWarningConfirm"
-            >
-              {{ t('onboarding.summaryStep.driveWipe.continue') }}
-            </button>
-          </div>
-        </div>
-      </Dialog>
+        </template>
+        <template #footer>
+          <UButton color="neutral" variant="outline" @click="handleBootDriveWarningCancel">
+            {{ t('common.cancel') }}
+          </UButton>
+          <UButton @click="handleBootDriveWarningConfirm">
+            {{ t('onboarding.summaryStep.driveWipe.continue') }}
+          </UButton>
+        </template>
+      </UModal>
 
-      <Dialog
-        v-if="showApplyResultDialog"
-        :model-value="showApplyResultDialog"
-        :show-footer="false"
-        :show-close-button="false"
-        size="lg"
-        class="w-[calc(100vw-2rem)] max-w-3xl"
+      <UModal
+        :open="showApplyResultDialog"
+        :dismissible="false"
+        :close="false"
+        :portal="false"
+        :title="applyResultTitle"
+        :description="applyResultMessage"
+        :ui="{
+          footer: 'justify-end',
+          overlay: 'z-50',
+          content: showDiagnosticLogsInResultDialog
+            ? 'z-50 w-[calc(100vw-2rem)] max-w-3xl'
+            : 'z-50 max-w-md',
+        }"
       >
-        <div class="space-y-6 p-2">
-          <div class="space-y-2">
-            <h3 class="text-lg font-semibold">{{ applyResultTitle }}</h3>
-            <p class="text-muted-foreground text-sm">
-              {{ applyResultMessage }}
-            </p>
-          </div>
-
-          <div v-if="showDiagnosticLogsInResultDialog" class="space-y-3">
+        <template v-if="showDiagnosticLogsInResultDialog" #body>
+          <div class="space-y-3">
             <h4 class="text-sm font-semibold tracking-wide uppercase">
               {{ t('onboarding.summaryStep.diagnosticLogs') }}
             </h4>
             <OnboardingConsole :logs="logs" :title="t('onboarding.summaryStep.onboardingDiagnostics')" />
           </div>
-
-          <div class="flex justify-end gap-3">
-            <button
-              type="button"
-              class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-2 text-sm font-medium"
-              @click="handleApplyResultConfirm"
-            >
-              {{ t('onboarding.summaryStep.ok') }}
-            </button>
-          </div>
-        </div>
-      </Dialog>
+        </template>
+        <template #footer>
+          <UButton @click="handleApplyResultConfirm">
+            {{ t('onboarding.summaryStep.ok') }}
+          </UButton>
+        </template>
+      </UModal>
 
       <!-- Footer -->
       <div
@@ -1575,7 +1421,7 @@ const handleBack = () => {
         <button
           v-if="showBack"
           @click="handleBack"
-          class="text-muted hover:text-toned group flex items-center justify-center gap-2 font-medium transition-colors sm:w-auto sm:justify-start"
+          class="text-muted hover:text-toned group flex items-center justify-center gap-2 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto sm:justify-start"
           :disabled="isProcessing"
         >
           <ChevronLeftIcon class="h-5 w-5 transition-transform group-hover:-translate-x-0.5" />

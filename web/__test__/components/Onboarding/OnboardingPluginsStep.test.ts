@@ -30,21 +30,9 @@ vi.mock('@unraid/ui', () => ({
     template:
       '<button data-testid="brand-button" :disabled="disabled" @click="$emit(\'click\')">{{ text }}</button>',
   },
-}));
-
-vi.mock('@headlessui/vue', () => ({
-  Switch: {
-    props: ['modelValue', 'disabled'],
-    emits: ['update:modelValue'],
-    template: `
-      <input
-        data-testid="plugin-switch"
-        type="checkbox"
-        :checked="modelValue"
-        :disabled="disabled"
-        @change="$emit('update:modelValue', $event.target.checked)"
-      />
-    `,
+  Spinner: {
+    name: 'Spinner',
+    template: '<div data-testid="loading-spinner" />',
   },
 }));
 
@@ -64,6 +52,7 @@ vi.mock('@vue/apollo-composable', async () => {
 describe('OnboardingPluginsStep', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    document.body.innerHTML = '';
     draftStore.selectedPlugins = new Set();
     draftStore.pluginSelectionInitialized = false;
     installedPluginsLoading.value = false;
@@ -97,6 +86,25 @@ describe('OnboardingPluginsStep', () => {
         props,
         global: {
           plugins: [createTestI18n()],
+          stubs: {
+            USwitch: {
+              props: ['modelValue', 'disabled'],
+              emits: ['update:modelValue'],
+              template: `
+                <input
+                  data-testid="plugin-switch"
+                  type="checkbox"
+                  :checked="modelValue"
+                  :disabled="disabled"
+                  @change="$emit('update:modelValue', $event.target.checked)"
+                />
+              `,
+            },
+            UAlert: {
+              props: ['description'],
+              template: '<div data-testid="alert">{{ description }}</div>',
+            },
+          },
         },
       }),
       props,
@@ -108,13 +116,13 @@ describe('OnboardingPluginsStep', () => {
 
     await flushPromises();
 
-    const switches = wrapper.findAll('input[type="checkbox"]');
+    const switches = wrapper.findAll('[role="switch"]');
     expect(switches.length).toBe(3);
-    expect((switches[0].element as HTMLInputElement).checked).toBe(true);
-    expect((switches[1].element as HTMLInputElement).checked).toBe(false);
-    expect((switches[2].element as HTMLInputElement).checked).toBe(false);
+    expect(switches[0].attributes('data-state')).toBe('checked');
+    expect(switches[1].attributes('data-state')).toBe('unchecked');
+    expect(switches[2].attributes('data-state')).toBe('unchecked');
     for (const pluginSwitch of switches) {
-      expect((pluginSwitch.element as HTMLInputElement).disabled).toBe(false);
+      expect(pluginSwitch.attributes('disabled')).toBeUndefined();
     }
 
     const nextButton = wrapper
@@ -140,11 +148,11 @@ describe('OnboardingPluginsStep', () => {
 
     await flushPromises();
 
-    const switches = wrapper.findAll('input[type="checkbox"]');
+    const switches = wrapper.findAll('[role="switch"]');
     expect(switches.length).toBe(3);
-    expect((switches[0].element as HTMLInputElement).checked).toBe(true);
-    expect((switches[1].element as HTMLInputElement).checked).toBe(true);
-    expect((switches[2].element as HTMLInputElement).checked).toBe(true);
+    expect(switches[0].attributes('data-state')).toBe('checked');
+    expect(switches[1].attributes('data-state')).toBe('checked');
+    expect(switches[2].attributes('data-state')).toBe('checked');
 
     const nextButton = wrapper
       .findAll('button')

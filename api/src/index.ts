@@ -30,8 +30,7 @@ import { StateManager } from '@app/store/watch/state-watch.js';
 
 let server: NestFastifyApplication<RawServerDefault> | null = null;
 
-// PM2 listen_timeout is 15 seconds (ecosystem.config.json)
-// We use 13 seconds as our total budget to ensure our timeout triggers before PM2 kills us
+// PM2 listen_timeout is 30 seconds (ecosystem.config.json)
 const TOTAL_STARTUP_BUDGET_MS = 30_000;
 // Reserve time for the NestJS bootstrap (the most critical and time-consuming operation)
 const BOOTSTRAP_RESERVED_MS = 20_000;
@@ -121,7 +120,9 @@ export const viteNodeApp = async (): Promise<NestFastifyApplication<RawServerDef
 
         // Start listening to file updates
         try {
-            StateManager.getInstance();
+            const timeout = budget.getTimeout(MAX_OPERATION_TIMEOUT_MS, BOOTSTRAP_RESERVED_MS);
+            const stateManager = StateManager.getInstance();
+            await withTimeout(stateManager.ready, timeout, 'stateManagerReady');
             logger.info('State manager initialized');
         } catch (error) {
             logger.error(error, 'Failed to initialize state manager');

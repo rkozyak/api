@@ -16,6 +16,7 @@ import {
     ValidateNested,
 } from 'class-validator';
 
+import { Disk } from '@app/unraid-api/graph/resolvers/disks/disks.model.js';
 import { RegistrationState } from '@app/unraid-api/graph/resolvers/registration/registration.model.js';
 
 @InputType({
@@ -31,6 +32,11 @@ export class OnboardingOverrideCompletionInput {
     @IsOptional()
     @IsString()
     completedAtVersion?: string | null;
+
+    @Field(() => Boolean, { nullable: true })
+    @IsOptional()
+    @IsBoolean()
+    forceOpen?: boolean | null;
 }
 
 @InputType({
@@ -325,4 +331,50 @@ export class OnboardingInternalBootResult {
 
     @Field(() => String)
     output!: string;
+}
+
+@ObjectType({
+    description: 'Warning metadata for an assignable internal boot drive',
+})
+export class OnboardingInternalBootDriveWarning {
+    @Field(() => String)
+    diskId!: string;
+
+    @Field(() => String)
+    device!: string;
+
+    @Field(() => [String])
+    warnings!: string[];
+}
+
+@ObjectType({
+    description: 'Current onboarding context for configuring internal boot',
+})
+export class OnboardingInternalBootContext {
+    @Field(() => Boolean)
+    arrayStopped!: boolean;
+
+    @Field(() => Boolean, { nullable: true })
+    bootEligible?: boolean | null;
+
+    @Field(() => Boolean)
+    bootedFromFlashWithInternalBootSetup!: boolean;
+
+    @Field(() => String, { nullable: true })
+    enableBootTransfer?: string | null;
+
+    @Field(() => [String])
+    reservedNames!: string[];
+
+    @Field(() => [String])
+    shareNames!: string[];
+
+    @Field(() => [String])
+    poolNames!: string[];
+
+    @Field(() => [Disk])
+    assignableDisks!: Disk[];
+
+    @Field(() => [OnboardingInternalBootDriveWarning])
+    driveWarnings!: OnboardingInternalBootDriveWarning[];
 }

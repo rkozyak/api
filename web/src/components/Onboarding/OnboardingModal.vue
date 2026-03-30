@@ -1,17 +1,16 @@
 <script lang="ts" setup>
-import { computed, onMounted, ref, watchEffect } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, watchEffect } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { storeToRefs } from 'pinia';
-import { useMutation } from '@vue/apollo-composable';
 
 import { ArrowTopRightOnSquareIcon, XMarkIcon } from '@heroicons/vue/24/solid';
 import { Dialog } from '@unraid/ui';
-import { COMPLETE_ONBOARDING_MUTATION } from '@/components/Onboarding/graphql/completeUpgradeStep.mutation';
 
 import type { BrandButtonProps } from '@unraid/ui';
 import type { StepId } from '~/components/Onboarding/stepRegistry.js';
 import type { Component } from 'vue';
 
+import OnboardingLoadingState from '~/components/Onboarding/components/OnboardingLoadingState.vue';
 import { DOCS_URL_ACCOUNT, DOCS_URL_LICENSING_FAQ } from '~/components/Onboarding/constants';
 import OnboardingSteps from '~/components/Onboarding/OnboardingSteps.vue';
 import { stepComponents } from '~/components/Onboarding/stepRegistry.js';
@@ -26,16 +25,25 @@ import { useServerStore } from '~/store/server';
 import { useThemeStore } from '~/store/theme';
 
 const { t } = useI18n();
+const ONBOARDING_HISTORY_STATE_KEY = '__unraidOnboarding';
+
+type OnboardingHistoryState = {
+  sessionId: string;
+  stepId: StepId;
+  source: 'automatic' | 'manual';
+  position: number;
+};
 
 const onboardingModalStore = useOnboardingModalStore();
-const { isAutoVisible, isForceOpened, isBypassActive } = storeToRefs(onboardingModalStore);
-const { activationRequired, hasActivationCode, isFreshInstall, registrationState } = storeToRefs(
-  useActivationCodeDataStore()
-);
+const { isVisible, sessionSource } = storeToRefs(onboardingModalStore);
+const {
+  activationRequired,
+  hasActivationCode,
+  registrationState,
+  loading: activationDataLoading,
+} = storeToRefs(useActivationCodeDataStore());
 const onboardingStore = useOnboardingStore();
-const { shouldShowOnboarding, isVersionDrift, completedAtVersion, canDisplayOnboardingModal } =
-  storeToRefs(onboardingStore);
-const { refetchOnboarding } = onboardingStore;
+const { isVersionDrift, completedAtVersion, canDisplayOnboardingModal } = storeToRefs(onboardingStore);
 const purchaseStore = usePurchaseStore();
 const { keyfile } = storeToRefs(useServerStore());
 const themeStore = useThemeStore();
@@ -43,7 +51,9 @@ const { internalBootVisibility, loading: onboardingContextLoading } = storeToRef
   useOnboardingContextDataStore()
 );
 const draftStore = useOnboardingDraftStore();
-const { currentStepIndex, currentStepId, internalBootApplySucceeded } = storeToRefs(draftStore);
+const { currentStepId, internalBootApplySucceeded, internalBootApplyAttempted } =
+  storeToRefs(draftStore);
+const isInternalBootLocked = computed(() => internalBootApplyAttempted.value);
 
 onMounted(async () => {
   try {
@@ -83,13 +93,7 @@ const showActivationStep = computed(() => {
 
 const showInternalBootStep = computed(() => {
   const setting = internalBootVisibility.value?.enableBootTransfer;
-  const bootedFromFlashWithInternalBootSetup =
-    internalBootVisibility.value?.bootedFromFlashWithInternalBootSetup === true;
-  return (
-    typeof setting === 'string' &&
-    setting.trim().toLowerCase() === 'yes' &&
-    !bootedFromFlashWithInternalBootSetup
-  );
+  return typeof setting === 'string' && setting.trim().toLowerCase() === 'yes';
 });
 
 const shouldKeepResumedInternalBootStep = computed(
@@ -98,17 +102,26 @@ const shouldKeepResumedInternalBootStep = computed(
     currentStepId.value === 'CONFIGURE_BOOT' &&
     internalBootVisibility.value === null
 );
+const shouldKeepResumedActivationStep = computed(
+  () =>
+    activationDataLoading.value &&
+    currentStepId.value === 'ACTIVATE_LICENSE' &&
+    !showActivationStep.value
+);
 
 // Determine which steps to show based on user state
 const visibleHardcodedSteps = computed(() =>
-  HARDCODED_STEPS.filter((step) => showActivationStep.value || step.id !== 'ACTIVATE_LICENSE').filter(
-    (step) => {
-      if (step.id !== 'CONFIGURE_BOOT') {
-        return true;
-      }
+  HARDCODED_STEPS.filter((step) => {
+    if (step.id === 'ACTIVATE_LICENSE') {
+      return showActivationStep.value || shouldKeepResumedActivationStep.value;
+    }
+
+    if (step.id === 'CONFIGURE_BOOT') {
       return showInternalBootStep.value || shouldKeepResumedInternalBootStep.value;
     }
-  )
+
+    return true;
+  })
 );
 const availableSteps = computed<StepId[]>(() => visibleHardcodedSteps.value.map((step) => step.id));
 
@@ -120,13 +133,74 @@ const showModal = computed(() => {
     return false;
   }
 
-  if (isForceOpened.value) {
-    return true;
+  return isVisible.value;
+});
+const isManualSession = computed(() => sessionSource.value === 'manual');
+const showExitConfirmDialog = ref(false);
+const isClosingModal = ref(false);
+const historySessionId = ref<string | null>(null);
+const historyPosition = ref(-1);
+const isApplyingHistoryState = ref(false);
+
+const createHistorySessionId = () =>
+  `onboarding-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const getHistoryState = (state: unknown): OnboardingHistoryState | null => {
+  if (!state || typeof state !== 'object') {
+    return null;
   }
 
-  return isFreshInstall.value && !isBypassActive.value && isAutoVisible.value;
-});
-const showExitConfirmDialog = ref(false);
+  const candidate = (state as Record<string, unknown>)[ONBOARDING_HISTORY_STATE_KEY];
+  if (!candidate || typeof candidate !== 'object') {
+    return null;
+  }
+
+  const sessionId =
+    typeof (candidate as Record<string, unknown>).sessionId === 'string'
+      ? ((candidate as Record<string, unknown>).sessionId as string)
+      : null;
+  const stepId =
+    typeof (candidate as Record<string, unknown>).stepId === 'string'
+      ? ((candidate as Record<string, unknown>).stepId as StepId)
+      : null;
+  const source = (candidate as Record<string, unknown>).source === 'manual' ? 'manual' : 'automatic';
+  const parsedPosition = Number((candidate as Record<string, unknown>).position);
+  const position = Number.isInteger(parsedPosition) ? parsedPosition : null;
+
+  if (!sessionId || !stepId || position === null) {
+    return null;
+  }
+
+  return {
+    sessionId,
+    stepId,
+    source,
+    position,
+  };
+};
+
+const buildHistoryState = (stepId: StepId, position: number) => {
+  const currentState =
+    typeof window.history.state === 'object' && window.history.state !== null
+      ? (window.history.state as Record<string, unknown>)
+      : {};
+
+  return {
+    ...currentState,
+    [ONBOARDING_HISTORY_STATE_KEY]: {
+      sessionId: historySessionId.value ?? '',
+      stepId,
+      source: sessionSource.value ?? 'automatic',
+      position,
+    } satisfies OnboardingHistoryState,
+  };
+};
+
+const clearHistorySession = () => {
+  historySessionId.value = null;
+  historyPosition.value = -1;
+  isApplyingHistoryState.value = false;
+};
 
 const getNearestVisibleStepId = (stepId: StepId): StepId | null => {
   const currentOrderIndex = STEP_ORDER.indexOf(stepId);
@@ -179,9 +253,8 @@ const currentDynamicStepIndex = computed(() => {
 
 watchEffect(() => {
   const stepId = currentStep.value;
-  const stepIndex = currentDynamicStepIndex.value;
 
-  if (!stepId || stepIndex >= availableSteps.value.length) {
+  if (!stepId || currentDynamicStepIndex.value >= availableSteps.value.length) {
     return;
   }
 
@@ -189,8 +262,8 @@ watchEffect(() => {
     return;
   }
 
-  if (currentStepId.value !== stepId || currentStepIndex.value !== stepIndex) {
-    draftStore.setCurrentStep(stepId, stepIndex);
+  if (currentStepId.value !== stepId) {
+    draftStore.setCurrentStep(stepId);
   }
 });
 
@@ -232,37 +305,12 @@ const docsButtons = computed<BrandButtonProps[]>(() => {
   ];
 });
 
-const { mutate: completeOnboardingMutation } = useMutation(COMPLETE_ONBOARDING_MUTATION);
-
-const completePendingOnboarding = async () => {
-  if (!shouldShowOnboarding.value) {
-    return;
-  }
-
+const closeModal = async () => {
   try {
-    await completeOnboardingMutation();
-    await refetchOnboarding();
-  } catch (error) {
-    console.error('[OnboardingModal] Failed to complete onboarding', error);
-  }
-};
-
-const closeModal = async (options?: { reload?: boolean }) => {
-  const wasForceOpened = isForceOpened.value;
-
-  if (shouldShowOnboarding.value && !wasForceOpened) {
-    await completePendingOnboarding();
-  }
-
-  if (wasForceOpened) {
+    await onboardingModalStore.closeModal();
+  } finally {
     cleanupOnboardingStorage();
-  } else {
-    cleanupOnboardingStorage({ clearTemporaryBypassSessionState: true });
-  }
-  onboardingModalStore.clearForceOpened();
-  onboardingModalStore.setIsHidden(true);
-
-  if (options?.reload) {
+    clearHistorySession();
     window.location.reload();
   }
 };
@@ -273,19 +321,17 @@ const setActiveStepByIndex = (stepIndex: number) => {
     return;
   }
 
-  draftStore.setCurrentStep(stepId, stepIndex);
+  draftStore.setCurrentStep(stepId);
 };
 
 const goToNextStep = async () => {
   if (availableSteps.value.length > 0) {
     const activeStepIndex = currentDynamicStepIndex.value;
 
-    // Move to next step
     if (activeStepIndex < availableSteps.value.length - 1) {
       setActiveStepByIndex(activeStepIndex + 1);
     } else {
-      // If we're at the last step, close the modal
-      await closeModal({ reload: true });
+      await closeModal();
     }
     return;
   }
@@ -294,18 +340,37 @@ const goToNextStep = async () => {
 };
 
 const goToPreviousStep = () => {
+  if (isInternalBootLocked.value) {
+    return;
+  }
+  if (typeof window !== 'undefined' && historySessionId.value && historyPosition.value > 0) {
+    window.history.back();
+    return;
+  }
+
   if (currentDynamicStepIndex.value > 0) {
     setActiveStepByIndex(currentDynamicStepIndex.value - 1);
   }
 };
 
 const goToStep = (stepIndex: number) => {
+  if (isInternalBootLocked.value && stepIndex < currentDynamicStepIndex.value) {
+    return;
+  }
   // Prevent skipping ahead via stepper; only allow current or previous steps.
   if (
     stepIndex >= 0 &&
     stepIndex < availableSteps.value.length &&
     stepIndex <= currentDynamicStepIndex.value
   ) {
+    if (typeof window !== 'undefined' && historySessionId.value) {
+      const delta = stepIndex - currentDynamicStepIndex.value;
+      if (delta < 0) {
+        window.history.go(delta);
+        return;
+      }
+    }
+
     setActiveStepByIndex(stepIndex);
   }
 };
@@ -315,6 +380,14 @@ const exitDialogDescription = computed(() =>
   internalBootApplySucceeded.value
     ? t('onboarding.modal.exit.internalBootDescription')
     : t('onboarding.modal.exit.description')
+);
+const isAwaitingStepData = computed(() => onboardingContextLoading.value && !currentStepComponent.value);
+const showModalLoadingState = computed(() => isClosingModal.value || isAwaitingStepData.value);
+const loadingStateTitle = computed(() =>
+  isClosingModal.value ? t('onboarding.modal.closing.title') : t('onboarding.loading.title')
+);
+const loadingStateDescription = computed(() =>
+  isClosingModal.value ? t('onboarding.modal.closing.description') : t('onboarding.loading.description')
 );
 
 const handleTimezoneComplete = async () => {
@@ -342,26 +415,118 @@ const handleInternalBootSkip = async () => {
 };
 
 const handleExitIntent = () => {
+  if (isClosingModal.value || isInternalBootLocked.value) {
+    return;
+  }
   showExitConfirmDialog.value = true;
 };
 
 const handleExitCancel = () => {
+  if (isClosingModal.value) {
+    return;
+  }
   showExitConfirmDialog.value = false;
 };
 
 const handleExitConfirm = async () => {
   showExitConfirmDialog.value = false;
-  await closeModal();
-};
-
-const handleActivationSkip = async () => {
-  // Just move to next step without marking complete
-  if (currentDynamicStepIndex.value < availableSteps.value.length - 1) {
-    setActiveStepByIndex(currentDynamicStepIndex.value + 1);
-  } else {
+  isClosingModal.value = true;
+  try {
     await closeModal();
+  } finally {
+    isClosingModal.value = false;
   }
 };
+
+const handlePopstate = async (event: PopStateEvent) => {
+  if (isInternalBootLocked.value) {
+    window.history.forward();
+    return;
+  }
+
+  const nextHistoryState = getHistoryState(event.state);
+  const activeSessionId = historySessionId.value;
+
+  if (!activeSessionId) {
+    return;
+  }
+
+  if (nextHistoryState?.sessionId === activeSessionId) {
+    historyPosition.value = nextHistoryState.position;
+
+    if (
+      availableSteps.value.includes(nextHistoryState.stepId) &&
+      currentStepId.value !== nextHistoryState.stepId
+    ) {
+      isApplyingHistoryState.value = true;
+      draftStore.setCurrentStep(nextHistoryState.stepId);
+      await nextTick();
+      isApplyingHistoryState.value = false;
+    }
+    return;
+  }
+
+  if (!showModal.value || !isManualSession.value) {
+    return;
+  }
+
+  showExitConfirmDialog.value = false;
+  isClosingModal.value = true;
+  try {
+    await closeModal();
+  } finally {
+    isClosingModal.value = false;
+  }
+};
+
+watch(
+  () => [showModal.value, currentStep.value, sessionSource.value] as const,
+  ([visible, stepId]) => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    if (!visible || !stepId) {
+      if (!visible) {
+        clearHistorySession();
+      }
+      return;
+    }
+
+    if (isApplyingHistoryState.value) {
+      return;
+    }
+
+    const currentHistoryState = getHistoryState(window.history.state);
+    if (!historySessionId.value) {
+      historySessionId.value = createHistorySessionId();
+      historyPosition.value = 0;
+      const method = isManualSession.value ? 'pushState' : 'replaceState';
+      window.history[method](buildHistoryState(stepId, historyPosition.value), '', window.location.href);
+      return;
+    }
+
+    if (
+      currentHistoryState?.sessionId === historySessionId.value &&
+      currentHistoryState.stepId === stepId &&
+      currentHistoryState.position === historyPosition.value
+    ) {
+      return;
+    }
+
+    historyPosition.value += 1;
+    window.history.pushState(buildHistoryState(stepId, historyPosition.value), '', window.location.href);
+  },
+  { flush: 'post', immediate: true }
+);
+
+onMounted(() => {
+  window?.addEventListener('popstate', handlePopstate);
+});
+
+onUnmounted(() => {
+  window?.removeEventListener('popstate', handlePopstate);
+});
 
 const currentStepProps = computed<Record<string, unknown>>(() => {
   const step = currentStep.value;
@@ -372,7 +537,7 @@ const currentStepProps = computed<Record<string, unknown>>(() => {
   const baseProps = {
     onComplete: () => goToNextStep(),
     onBack: goToPreviousStep,
-    showBack: canGoBack.value,
+    showBack: canGoBack.value && !isInternalBootLocked.value,
     isCompleted: false, // No server-side step completion tracking
     isSavingStep: false,
   };
@@ -422,7 +587,6 @@ const currentStepProps = computed<Record<string, unknown>>(() => {
     case 'ACTIVATE_LICENSE':
       return {
         ...baseProps,
-        onComplete: handleActivationSkip,
         modalTitle: modalTitle.value,
         modalDescription: modalDescription.value,
         docsButtons: docsButtons.value,
@@ -432,6 +596,12 @@ const currentStepProps = computed<Record<string, unknown>>(() => {
         allowSkip: allowActivationSkip.value,
         showKeyfileHint: showKeyfileHint.value,
         showActivationCodeHint: hasActivationCode.value,
+      };
+
+    case 'NEXT_STEPS':
+      return {
+        ...baseProps,
+        onComplete: () => closeModal(),
       };
 
     default:
@@ -458,23 +628,32 @@ const currentStepProps = computed<Record<string, unknown>>(() => {
   >
     <div class="relative flex h-full min-h-0 w-full flex-col items-center justify-start overflow-y-auto">
       <button
+        v-if="!isInternalBootLocked"
         type="button"
         class="bg-background/90 text-foreground hover:bg-muted fixed top-5 right-8 z-20 rounded-md p-1.5 shadow-sm transition-colors"
         :aria-label="t('onboarding.modal.closeAriaLabel')"
+        :disabled="isClosingModal"
         @click="handleExitIntent"
       >
         <XMarkIcon class="h-5 w-5" />
       </button>
 
       <div class="flex min-h-0 w-full flex-1 flex-col items-center">
-        <OnboardingSteps
-          :steps="filteredSteps"
-          :active-step-index="currentDynamicStepIndex"
-          :on-step-click="goToStep"
-          class="mb-8"
-        />
+        <template v-if="showModalLoadingState">
+          <div class="flex w-full max-w-4xl flex-1 items-center px-4 pb-4 md:px-8">
+            <OnboardingLoadingState :title="loadingStateTitle" :description="loadingStateDescription" />
+          </div>
+        </template>
+        <template v-else>
+          <OnboardingSteps
+            :steps="filteredSteps"
+            :active-step-index="currentDynamicStepIndex"
+            :on-step-click="goToStep"
+            class="mb-8"
+          />
 
-        <component v-if="currentStepComponent" :is="currentStepComponent" v-bind="currentStepProps" />
+          <component v-if="currentStepComponent" :is="currentStepComponent" v-bind="currentStepProps" />
+        </template>
       </div>
     </div>
   </Dialog>
@@ -506,6 +685,7 @@ const currentStepProps = computed<Record<string, unknown>>(() => {
         <button
           type="button"
           class="border-muted text-foreground hover:bg-muted rounded-md border px-4 py-2 text-sm"
+          :disabled="isClosingModal"
           @click="handleExitCancel"
         >
           {{ t('onboarding.modal.exit.keepOnboarding') }}
@@ -513,6 +693,7 @@ const currentStepProps = computed<Record<string, unknown>>(() => {
         <button
           type="button"
           class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-2 text-sm font-medium"
+          :disabled="isClosingModal"
           @click="handleExitConfirm"
         >
           {{ t('onboarding.modal.exit.confirm') }}

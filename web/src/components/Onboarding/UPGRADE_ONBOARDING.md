@@ -2,7 +2,7 @@
 
 ## Overview
 
-This system uses a shared onboarding modal flow. Automatic modal display is limited to fresh installs (`ENOKEYFILE`). Upgrade/downgrade status is still tracked and can affect copy/behavior when the modal is opened manually. The API tracks onboarding completion state (`completed`, `completedAtVersion`) and the web client decides whether the modal should appear and which local steps to render.
+This system uses a shared onboarding modal flow. Automatic modal display applies to any incomplete onboarding state on supported versions (`7.3.0+`), while completed patch-only releases stay quiet. Downgrade status is still tracked and can affect copy/behavior when the modal is opened manually. The API tracks onboarding completion state (`completed`, `completedAtVersion`) and computes the `shouldOpen` recommendation, while the web client applies final UI guards before showing the modal and decides which local steps to render.
 
 ## How It Works
 
@@ -32,9 +32,10 @@ This system uses a shared onboarding modal flow. Automatic modal display is limi
      - minimum supported version (`7.3.0+`)
      - authenticated access (no unauthenticated GraphQL errors)
    - Exposes `shouldShowOnboarding` when status is `INCOMPLETE`
+   - Auto-opens for incomplete onboarding on supported versions
 
 2. **Unified Modal** - `web/src/components/Onboarding/OnboardingModal.vue`
-   - Automatically shows for fresh-install onboarding
+   - Automatically shows for incomplete onboarding on supported versions
    - Can be force-opened for any user via URL action/event triggers
    - Uses a client-side hardcoded step list (`HARDCODED_STEPS`)
    - Conditionally includes/removes `ACTIVATE_LICENSE` based on activation state
@@ -117,11 +118,12 @@ To test activation-step gating:
 
 ## Notes
 
-- Automatic onboarding visibility is fresh-install driven (`ENOKEYFILE`) with client-side guards (min version + auth)
-- Status is still available for mode-aware copy; automatic visibility is fresh-install-only
+- Automatic onboarding visibility is driven by backend `shouldOpen`, which now opens incomplete onboarding on supported versions
+- Patch-only releases still remain silent because upgrade detection ignores same-minor version drift
 - The modal automatically switches between fresh-install and version-drift copy
 - There is no server-side per-step completion tracking in this flow
 - Exiting onboarding can call `completeOnboarding`; temporary bypass does not
+- Summary applies and validates draft settings only; final completion happens from Next Steps
 - Version comparison uses semver for reliable ordering
 - The same modal component handles all modes for consistency
 - During apply in the summary step, if baseline core-settings query data is unavailable, onboarding runs in best-effort mode using trusted defaults plus draft values and still proceeds. This behavior is intentional to avoid hard-blocking onboarding when baseline reads are unavailable.
@@ -198,14 +200,13 @@ On mount, summary step starts:
 
 #### Apply Sequence (When User Clicks Confirm)
 
-1. Lock modal visibility (`setIsHidden(false)`).
-2. Compute baseline vs target settings.
-3. Apply core settings (timezone, identity, theme).
-4. Apply locale (with language install when needed).
-5. Install selected plugins not already installed.
-6. Apply SSH settings (optimistic verification).
-7. Call completion mutation and attempt onboarding refetch.
-8. Show final result dialog based on precedence.
+1. Compute baseline vs target settings.
+2. Apply core settings (timezone, identity, theme).
+3. Apply locale (with language install when needed).
+4. Install selected plugins not already installed.
+5. Apply SSH settings (optimistic verification).
+6. Show final result dialog based on apply/result precedence.
+7. Advance to Next Steps after user confirmation.
 
 #### Endpoint/Operation Mapping
 
@@ -221,7 +222,7 @@ On mount, summary step starts:
 | Update SSH | `UpdateSshSettings` |
 | Install plugin | `InstallPlugin` (+ operation tracking query/subscription) |
 | Install language pack | `InstallLanguage` (+ operation tracking query/subscription) |
-| Mark onboarding complete | `CompleteOnboarding` |
+| Final onboarding completion | `CompleteOnboarding` (triggered from Next Steps) |
 
 ### Temporary Bypass Controls
 
@@ -328,20 +329,18 @@ Test file: `web/__test__/components/Onboarding/OnboardingSummaryStep.test.ts`
 | L5 | non-default | present | malformed/unknown status | Keep current locale, warning. |
 | L6 | non-default | present | timeout error | Timeout classification path. |
 
-#### D) Summary Step: Completion/Result Precedence Matrix
+#### D) Summary Step: Apply/Result Precedence Matrix
 
 Test file: `web/__test__/components/Onboarding/OnboardingSummaryStep.test.ts`
 
-| Case | Completion status | Refetch status | Other flags | Expected dialog class |
+| Case | Baseline status | Apply status | Other flags | Expected dialog class |
 | --- | --- | --- | --- | --- |
-| R1 | success | success | none | Setup Applied |
-| R2 | success | fail | warnings | Best-Effort |
-| R3 | success | skipped (baseline unavailable) | warnings | Best-Effort |
-| R4 | fail | skipped | any | Best-Effort |
-| R5 | fail | skipped | timeout present | Best-Effort (completion failure wins) |
-| R6 | success | success | timeout + warnings | Timeout classification wins |
-| R7 | success | success | SSH verified | Fully applied path |
-| R8 | success | success | SSH unverified | Best-Effort |
+| R1 | available | all apply operations succeed | none | Setup Applied |
+| R2 | unavailable | best-effort apply path | warnings | Best-Effort |
+| R3 | available | some apply operations warn/fail | warnings | Warnings |
+| R4 | available or unavailable | timeout during plugin/language install | timeout present | Timeout classification wins |
+| R5 | available | SSH verified | none | Fully applied path |
+| R6 | available | SSH update submitted | SSH unverified | Best-Effort |
 
 #### E) Summary Step: Apply Interaction Matrix
 

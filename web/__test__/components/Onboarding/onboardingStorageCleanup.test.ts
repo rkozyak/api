@@ -2,16 +2,12 @@ import { createPinia, setActivePinia } from 'pinia';
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  ONBOARDING_MODAL_HIDDEN_STORAGE_KEY,
-  ONBOARDING_TEMP_BYPASS_STORAGE_KEY,
-} from '~/components/Onboarding/constants';
+import { ONBOARDING_MODAL_HIDDEN_STORAGE_KEY } from '~/components/Onboarding/constants';
 import { useOnboardingDraftStore } from '~/components/Onboarding/store/onboardingDraft';
 import {
   cleanupOnboardingStorage,
   clearLegacyOnboardingModalHiddenSessionState,
   clearOnboardingDraftStorage,
-  clearTemporaryBypassSessionState,
 } from '~/components/Onboarding/store/onboardingStorageCleanup';
 
 describe('onboardingStorageCleanup', () => {
@@ -22,8 +18,8 @@ describe('onboardingStorageCleanup', () => {
   });
 
   it('clears onboarding draft keys from localStorage', () => {
-    window.localStorage.setItem('onboardingDraft', '{"currentStepIndex":2}');
-    window.localStorage.setItem('pinia-onboardingDraft', '{"currentStepIndex":1}');
+    window.localStorage.setItem('onboardingDraft', '{"currentStepId":"CONFIGURE_BOOT"}');
+    window.localStorage.setItem('pinia-onboardingDraft', '{"currentStepId":"ADD_PLUGINS"}');
     window.localStorage.setItem('unrelatedKey', 'keep');
 
     clearOnboardingDraftStorage();
@@ -43,22 +39,13 @@ describe('onboardingStorageCleanup', () => {
       language: 'en_US',
       useSsh: true,
     });
-    draftStore.setCurrentStep('CONFIGURE_BOOT', 2);
+    draftStore.setCurrentStep('CONFIGURE_BOOT');
 
     clearOnboardingDraftStorage();
 
     expect(draftStore.hasResumableDraft).toBe(false);
-    expect(draftStore.currentStepIndex).toBe(0);
     expect(draftStore.currentStepId).toBeNull();
     expect(draftStore.coreSettingsInitialized).toBe(false);
-  });
-
-  it('clears temporary bypass key from sessionStorage', () => {
-    window.sessionStorage.setItem(ONBOARDING_TEMP_BYPASS_STORAGE_KEY, '{"active":true}');
-
-    clearTemporaryBypassSessionState();
-
-    expect(window.sessionStorage.getItem(ONBOARDING_TEMP_BYPASS_STORAGE_KEY)).toBeNull();
   });
 
   it('clears legacy hidden onboarding key from sessionStorage', () => {
@@ -69,15 +56,13 @@ describe('onboardingStorageCleanup', () => {
     expect(window.sessionStorage.getItem(ONBOARDING_MODAL_HIDDEN_STORAGE_KEY)).toBeNull();
   });
 
-  it('cleans draft storage and optional temporary bypass key together', () => {
-    window.localStorage.setItem('onboardingDraft', '{"currentStepIndex":4}');
+  it('cleans draft storage and legacy hidden onboarding key together', () => {
+    window.localStorage.setItem('onboardingDraft', '{"currentStepId":"SUMMARY"}');
     window.sessionStorage.setItem(ONBOARDING_MODAL_HIDDEN_STORAGE_KEY, 'true');
-    window.sessionStorage.setItem(ONBOARDING_TEMP_BYPASS_STORAGE_KEY, '{"active":true}');
 
-    cleanupOnboardingStorage({ clearTemporaryBypassSessionState: true });
+    cleanupOnboardingStorage();
 
     expect(window.localStorage.getItem('onboardingDraft')).toBeNull();
     expect(window.sessionStorage.getItem(ONBOARDING_MODAL_HIDDEN_STORAGE_KEY)).toBeNull();
-    expect(window.sessionStorage.getItem(ONBOARDING_TEMP_BYPASS_STORAGE_KEY)).toBeNull();
   });
 });
